@@ -1,0 +1,8 @@
+# macOS
+.DS_Store
+
+# 微信开发者工具的本地编译产物
+miniprogram/miniprogram_npm/
+
+# 依赖（这个工程暂时没有，先占位）
+node_modules/
