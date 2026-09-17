@@ -1,0 +1,253 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #F2F3F5;
+}
+
+/* ── 顶部 ───────────────────────────────────── */
+.topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  padding: 24rpx 32rpx 18rpx;
+  background: #fff;
+  border-bottom: 1rpx solid #EDEDED;
+}
+.tb-left { flex: 1; min-width: 0; }
+.topbar .title { font-size: 36rpx; font-weight: 600; }
+.topbar .sub {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: #8A8A8A;
+  line-height: 1.5;
+}
+.tb-right {
+  flex: none;
+  font-size: 24rpx;
+  color: #FA5151;
+  padding: 12rpx 22rpx;
+  border: 1rpx solid #FFD5D5;
+  background: #FFF5F5;
+  border-radius: 999rpx;
+}
+
+/* ── 日期条 ─────────────────────────────────── */
+.datebar {
+  flex: none;
+  background: #fff;
+  padding: 18rpx 32rpx;
+  border-bottom: 1rpx solid #EDEDED;
+  white-space: nowrap;
+}
+.date {
+  display: inline-block;
+  min-width: 112rpx;
+  padding: 12rpx 8rpx;
+  margin-right: 14rpx;
+  border-radius: 18rpx;
+  background: #F2F3F5;
+  text-align: center;
+  border: 1rpx solid transparent;
+}
+.date:last-child { margin-right: 0; }
+.date.active { background: #1989FA; border-color: #1989FA; }
+.date .dow { font-size: 21rpx; color: #8A8A8A; line-height: 1.3; }
+.date .dnum { font-size: 29rpx; font-weight: 600; margin-top: 4rpx; line-height: 1.2; }
+.date.active .dow, .date.active .dnum { color: #fff; }
+
+/* ── 图例 ───────────────────────────────────── */
+.legend {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  padding: 12rpx 32rpx;
+  background: #fff;
+  border-bottom: 1rpx solid #EDEDED;
+}
+.legend .lg {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  font-size: 21rpx;
+  color: #8A8A8A;
+}
+.dot { width: 20rpx; height: 20rpx; border-radius: 6rpx; flex: none; }
+.dot.rule { background: #fff; border: 1rpx solid #D6D6D6; }
+.dot.ov   { background: #FF9500; }
+.dot.sel  { background: #1989FA; }
+.lg-note {
+  margin-left: auto;
+  font-size: 20rpx;
+  color: #B4B4B4;
+}
+
+/* ── 表头 ───────────────────────────────────── */
+.grid-head {
+  flex: none;
+  display: flex;
+  background: #fff;
+  border-bottom: 1rpx solid #EDEDED;
+}
+.grid-head .th {
+  height: 70rpx;
+  line-height: 70rpx;
+  text-align: center;
+  font-size: 25rpx;
+  font-weight: 600;
+  border-right: 1rpx solid #EDEDED;
+}
+.grid-head .corner {
+  width: 108rpx;
+  flex: none;
+  font-size: 21rpx;
+  font-weight: 400;
+  color: #8A8A8A;
+}
+.grid-head .court {
+  flex: 1;
+  min-width: 0;
+  color: #1989FA;
+}
+
+/* ── 网格 ───────────────────────────────────── */
+.grid-scroll {
+  flex: 1;
+  min-height: 0;
+  background: #fff;
+}
+.grid-pad { height: 20rpx; }
+
+.grid-row {
+  display: flex;
+  border-bottom: 1rpx solid #EDEDED;
+}
+.grid-row .td {
+  height: 80rpx;
+  border-right: 1rpx solid #EDEDED;
+}
+.grid-row .time {
+  width: 108rpx;
+  flex: none;
+  line-height: 80rpx;
+  text-align: center;
+  font-size: 23rpx;
+  color: #1989FA;
+  font-weight: 500;
+}
+.grid-row .hour {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.half {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24rpx;
+  color: #1A1A1A;
+  position: relative;
+}
+.half + .half { border-left: 1rpx dashed #E4E4E4; }
+.half.hide { visibility: hidden; }
+
+/* 手改过的格子：橙底 + 右上角小点 */
+.half.override {
+  background: #FFF4E5;
+  color: #C97C0A;
+  font-weight: 600;
+}
+.half.override::after {
+  content: '';
+  position: absolute;
+  top: 8rpx;
+  right: 8rpx;
+  width: 8rpx;
+  height: 8rpx;
+  border-radius: 50%;
+  background: #FF9500;
+}
+
+.half.selected {
+  background: #1989FA;
+  color: #fff;
+  font-weight: 600;
+}
+.half.selected::after { display: none; }
+
+/* ── 工具条 ─────────────────────────────────── */
+.toolbar {
+  flex: none;
+  background: #fff;
+  border-top: 1rpx solid #EDEDED;
+  padding: 20rpx 32rpx calc(20rpx + env(safe-area-inset-bottom));
+  box-shadow: 0 -2rpx 24rpx rgba(0, 0, 0, .05);
+}
+.tb-row1 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 24rpx;
+  color: #5A5A5A;
+  margin-bottom: 14rpx;
+}
+.tb-row1 .selinfo { font-weight: 600; }
+.tb-row1 .selinfo .num { color: #1989FA; font-size: 28rpx; }
+.tb-row1 .clear { color: #8A8A8A; text-decoration: underline; }
+
+.tb-row2 {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  margin-bottom: 16rpx;
+}
+.tb-row2 .prefix {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #FF9500;
+}
+.priceInput {
+  flex: 1;
+  min-width: 0;
+  height: 72rpx;
+  border: 1rpx solid #EDEDED;
+  border-radius: 16rpx;
+  padding: 0 20rpx;
+  font-size: 30rpx;
+  background: #FAFAFA;
+  text-align: left;
+}
+.chip {
+  flex: none;
+  font-size: 24rpx;
+  color: #1989FA;
+  background: #F2F8FF;
+  border: 1rpx solid #C9E1FF;
+  border-radius: 999rpx;
+  padding: 10rpx 20rpx;
+}
+
+.tb-row3 {
+  display: flex;
+  gap: 18rpx;
+}
+.tb-row3 .btn-ghost { flex: 1; font-size: 28rpx; }
+.tb-row3 .btn { flex: 1.4; font-size: 28rpx; background: #1989FA; }
+.tb-row3 .btn[disabled],
+.tb-row3 .btn-ghost[disabled] {
+  background: #F2F3F5 !important;
+  color: #B4B4B4 !important;
+  border-color: #EDEDED !important;
+}
+
+.tb-hint {
+  margin-top: 14rpx;
+  font-size: 21rpx;
+  color: #B4B4B4;
+  text-align: center;
+}

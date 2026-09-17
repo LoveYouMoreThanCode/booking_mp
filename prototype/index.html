@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>羽毛球场地预约 · 客人端</title>
+<style>
+  :root{
+    --green:#07C160; --green-dark:#06AD56; --green-soft:#E8F8EF;
+    --bg:#F2F3F5; --text:#1A1A1A; --text-sub:#8A8A8A; --text-weak:#C4C4C4;
+    --booked-bg:#F1F1F1; --past-bg:#FAFAFA; --border:#EDEDED;
+    --orange:#FF9500; --red:#FA5151;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    background:#E9EAEC;color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue","Microsoft YaHei",sans-serif;
+    display:flex;align-items:center;justify-content:center;
+  }
+
+  /* ── 手机外框 ─────────────────────────────── */
+  .phone{
+    width:100%;max-width:420px;height:100dvh;max-height:900px;
+    background:var(--bg);display:flex;flex-direction:column;overflow:hidden;
+    box-shadow:0 12px 48px rgba(0,0,0,.18);
+  }
+  @media(min-width:520px){ .phone{border-radius:22px;} }
+
+  /* ── 顶部 ─────────────────────────────────── */
+  .topbar{background:#fff;padding:14px 16px 10px;border-bottom:1px solid var(--border);flex:none;}
+  .topbar h1{margin:0;font-size:17px;font-weight:600;}
+  .topbar .sub{margin-top:3px;font-size:12px;color:var(--text-sub);}
+
+  /* ── 日期条 ───────────────────────────────── */
+  .datebar{
+    display:flex;gap:8px;overflow-x:auto;padding:11px 16px;background:#fff;
+    flex:none;scrollbar-width:none;border-bottom:1px solid var(--border);
+  }
+  .datebar::-webkit-scrollbar{display:none;}
+  .date{
+    flex:none;min-width:58px;padding:7px 4px;border-radius:10px;background:var(--bg);
+    text-align:center;cursor:pointer;transition:all .16s ease;border:1px solid transparent;
+  }
+  .date .dow{font-size:11px;color:var(--text-sub);line-height:1.3;}
+  .date .dnum{font-size:15px;font-weight:600;margin-top:2px;line-height:1.2;}
+  .date.active{background:var(--green);border-color:var(--green);}
+  .date.active .dow,.date.active .dnum{color:#fff;}
+
+  /* ── 图例 ─────────────────────────────────── */
+  .legend{
+    display:flex;gap:13px;padding:8px 16px;background:#fff;flex:none;flex-wrap:wrap;
+    border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub);
+  }
+  .legend span{display:flex;align-items:center;gap:5px;}
+  .legend .unit{margin-left:auto;color:#B0B0B0;}
+  .dot{width:11px;height:11px;border-radius:3px;flex:none;}
+  .dot.free{background:#fff;border:1px solid #D6D6D6;}
+  .dot.sel{background:var(--green);}
+  .dot.pending{background:#FFF7E6;border:1px solid #F0D9AE;}
+  .dot.booked{background:var(--booked-bg);}
+  .dot.past{background:var(--past-bg);border:1px solid #EFEFEF;}
+
+  /* ── 网格 ─────────────────────────────────── */
+  .grid-scroll{flex:1;overflow:auto;background:#fff;-webkit-overflow-scrolling:touch;}
+  table.grid{border-collapse:separate;border-spacing:0;table-layout:fixed;width:100%;}
+  .grid th,.grid td{border-right:1px solid var(--border);border-bottom:1px solid var(--border);}
+
+  .grid thead th{
+    position:sticky;top:0;z-index:2;background:#fff;height:40px;
+    font-size:13px;font-weight:600;white-space:nowrap;
+  }
+  .grid th.corner{
+    position:sticky;left:0;top:0;z-index:3;background:#fff;
+    width:56px;min-width:56px;font-size:11px;font-weight:400;color:var(--text-sub);
+  }
+  .grid td.time{
+    position:sticky;left:0;z-index:1;background:#fff;
+    width:56px;min-width:56px;height:50px;text-align:center;
+    font-size:12.5px;color:var(--text-sub);font-variant-numeric:tabular-nums;
+    font-weight:500;
+  }
+
+  /* 一小时一格，内部左右劈成两个半小时 */
+  .grid td.hour{padding:0;height:50px;}
+  .halves{display:flex;height:100%;}
+  .half{
+    flex:1;display:flex;align-items:center;justify-content:center;
+    font-size:13px;font-weight:600;color:var(--green);
+    cursor:pointer;user-select:none;font-variant-numeric:tabular-nums;
+    transition:background .12s ease,color .12s ease;
+  }
+  .half + .half{border-left:1px dashed #E4E4E4;}
+  .half:active:not(.booked):not(.past){background:var(--green-soft);}
+
+  .half.selected{background:var(--green);color:#fff;font-weight:600;}
+  .half.selected + .half.selected{border-left-color:rgba(255,255,255,.35);}
+  .half.selected:active{background:var(--green-dark);}
+
+  .half.confirmed{background:var(--booked-bg);color:#B4B4B4;font-weight:400;cursor:not-allowed;}
+  .half.pending{background:#FFF7E6;color:#E8A33D;font-weight:400;cursor:not-allowed;}
+  .half.past{background:var(--past-bg);color:#DCDCDC;font-weight:400;cursor:not-allowed;}
+
+  /* ── 底部结算 ─────────────────────────────── */
+  .footer{
+    flex:none;background:#fff;border-top:1px solid var(--border);
+    padding:11px 16px calc(11px + env(safe-area-inset-bottom));
+    display:flex;align-items:center;gap:12px;
+    box-shadow:0 -2px 12px rgba(0,0,0,.04);
+  }
+  .footer .info{flex:1;min-width:0;}
+  .footer .lines{font-size:12px;color:var(--text-sub);line-height:1.5;max-height:38px;overflow:hidden;}
+  .footer .lines b{color:var(--text);font-weight:600;}
+  .footer .empty{font-size:12.5px;color:var(--text-sub);}
+  .footer .total{margin-top:2px;font-size:12px;color:var(--text-sub);}
+  .footer .total em{
+    font-style:normal;font-size:19px;font-weight:700;color:var(--orange);
+    font-variant-numeric:tabular-nums;
+  }
+  .btn{
+    flex:none;border:none;border-radius:999px;background:var(--green);color:#fff;
+    font-size:15px;font-weight:600;padding:11px 26px;cursor:pointer;
+    font-family:inherit;transition:opacity .15s;
+  }
+  .btn:active{opacity:.82;}
+  .btn:disabled{background:#D8D8D8;cursor:not-allowed;}
+
+  /* ── 弹层 ─────────────────────────────────── */
+  .mask{position:absolute;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-end;z-index:10;}
+  .mask.show{display:flex;animation:fade .18s ease;}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  .sheet{
+    width:100%;background:#fff;border-radius:16px 16px 0 0;
+    padding:18px 18px calc(18px + env(safe-area-inset-bottom));
+    animation:up .24s cubic-bezier(.2,.8,.3,1);max-height:92%;overflow-y:auto;
+  }
+  @keyframes up{from{transform:translateY(100%)}to{transform:translateY(0)}}
+  .sheet h2{margin:0 0 4px;font-size:17px;font-weight:600;}
+  .sheet .hint{font-size:12px;color:var(--text-sub);margin-bottom:14px;line-height:1.5;}
+  .summary-box{
+    background:var(--green-soft);border-radius:10px;padding:11px 13px;margin-bottom:15px;
+    font-size:13px;line-height:1.75;color:#0B6B39;
+  }
+  .summary-box .r{display:flex;justify-content:space-between;gap:10px;}
+  .summary-box .r b{font-weight:600;font-variant-numeric:tabular-nums;}
+  .summary-box .tot{
+    margin-top:7px;padding-top:7px;border-top:1px solid rgba(11,107,57,.18);
+    font-weight:600;
+  }
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:13px;font-weight:600;margin-bottom:6px;}
+  .field label .req{color:var(--red);margin-left:2px;}
+  .field input,.field textarea{
+    width:100%;border:1px solid var(--border);border-radius:9px;padding:11px 12px;
+    font-size:15px;font-family:inherit;background:#FAFAFA;outline:none;
+    transition:border-color .15s,background .15s;resize:none;
+  }
+  .field input:focus,.field textarea:focus{border-color:var(--green);background:#fff;}
+  .field textarea{height:64px;line-height:1.5;}
+  .field .tip{font-size:11.5px;color:var(--text-sub);margin-top:5px;}
+  .err{color:var(--red);font-size:12.5px;margin-top:5px;display:none;}
+  .err.show{display:block;}
+  .actions{display:flex;gap:10px;margin-top:4px;}
+  .btn-ghost{
+    flex:1;border:1px solid var(--border);border-radius:999px;background:#fff;
+    color:var(--text);font-size:15px;padding:11px;cursor:pointer;font-family:inherit;
+  }
+  .actions .btn{flex:2;}
+
+  /* ── 成功页 ───────────────────────────────── */
+  .done{
+    position:absolute;inset:0;background:#fff;z-index:20;display:none;
+    flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center;
+  }
+  .done.show{display:flex;}
+  .done .ring{
+    width:68px;height:68px;border-radius:50%;background:var(--green-soft);
+    display:flex;align-items:center;justify-content:center;margin-bottom:18px;
+  }
+  .done .ring svg{width:34px;height:34px;}
+  .done h2{margin:0 0 8px;font-size:19px;}
+  .done p{margin:0;font-size:13.5px;color:var(--text-sub);line-height:1.7;max-width:290px;}
+  .done .again{
+    margin-top:24px;border:1px solid var(--green);color:var(--green);background:#fff;
+    border-radius:999px;padding:10px 26px;font-size:14px;font-family:inherit;cursor:pointer;
+  }
+
+  /* ── 轻提示 ───────────────────────────────── */
+  .toast{
+    position:absolute;left:50%;bottom:96px;transform:translate(-50%,10px);
+    background:rgba(0,0,0,.82);color:#fff;font-size:13px;line-height:1.5;
+    padding:10px 18px;border-radius:10px;opacity:0;pointer-events:none;
+    transition:opacity .22s,transform .22s;z-index:30;
+    max-width:82%;text-align:center;
+  }
+  .toast.show{opacity:1;transform:translate(-50%,0);}
+</style>
+</head>
+<body>
+
+<div class="phone">
+
+  <div class="topbar">
+    <h1>羽毛球场地预约</h1>
+    <div class="sub">选择场地与时段，提交后我们会电话与您确认</div>
+  </div>
+
+  <div class="datebar" id="datebar"></div>
+
+  <div class="legend">
+    <span><i class="dot free"></i>可约</span>
+    <span><i class="dot sel"></i>已选</span>
+    <span><i class="dot pending"></i>确认中</span>
+    <span><i class="dot booked"></i>已约满</span>
+    <span><i class="dot past"></i>已过</span>
+    <span class="unit">每格 30 分钟 · 单位 元</span>
+  </div>
+
+  <div class="grid-scroll" id="gridScroll">
+    <table class="grid" id="grid"></table>
+  </div>
+
+  <div class="footer">
+    <div class="info" id="footerInfo">
+      <div class="empty">请选择时段</div>
+    </div>
+    <button class="btn" id="submitBtn" disabled>提交预约</button>
+  </div>
+
+  <!-- 联系方式 -->
+  <div class="mask" id="mask">
+    <div class="sheet">
+      <h2>填写联系方式</h2>
+      <div class="hint">提交后场地将为您保留，我们会尽快致电确认</div>
+      <div class="summary-box" id="sheetSummary"></div>
+
+      <div class="field">
+        <label>手机号<span class="req">*</span></label>
+        <input id="phone" type="tel" inputmode="numeric" maxlength="11" placeholder="请输入 11 位手机号">
+        <div class="err" id="phoneErr">请输入正确的 11 位手机号</div>
+      </div>
+
+      <div class="field">
+        <label>称呼（选填）</label>
+        <input id="name" type="text" maxlength="20" placeholder="怎么称呼您">
+      </div>
+
+      <div class="field">
+        <label>备注需求（选填）</label>
+        <textarea id="note" maxlength="100" placeholder="例如：需要球网、租两支球拍、带小朋友"></textarea>
+        <div class="tip">有特殊需求可以写在这里，方便我们提前准备</div>
+      </div>
+
+      <div class="actions">
+        <button class="btn-ghost" id="cancelBtn">返回</button>
+        <button class="btn" id="confirmBtn">确认提交</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 提交成功 -->
+  <div class="done" id="done">
+    <div class="ring">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#07C160" stroke-width="2.6"
+           stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="20 6 9 17 4 12"></polyline>
+      </svg>
+    </div>
+    <h2>已提交，等待确认</h2>
+    <p id="doneText">我们会尽快致电与您确认，请保持手机畅通</p>
+    <button class="again" id="againBtn">再约一场</button>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+</div>
+
+<script src="core.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+let currentDay = 0;
+const selection = new Set();          // "ci|day|min"
+
+const keyOf = (ci, min) => `${ci}|${currentDay}|${min}`;
+
+/* ── 日期条 ─────────────────────────────────────── */
+function renderDates() {
+  const bar = $('datebar');
+  bar.innerHTML = '';
+  DATES.forEach((d, i) => {
+    const el = document.createElement('div');
+    el.className = 'date' + (i === currentDay ? ' active' : '');
+    el.innerHTML = `<div class="dow">${dateLabel(d, i)}</div>
+                    <div class="dnum">${d.getMonth() + 1}/${d.getDate()}</div>`;
+    el.onclick = () => {
+      if (i === currentDay) return;
+      currentDay = i;
+      selection.clear();              // 一次预约只针对一天
+      renderDates();
+      renderGrid();
+    };
+    bar.appendChild(el);
+  });
+}
+
+/* ── 网格 ───────────────────────────────────────── */
+function renderGrid() {
+  const n = CONFIG.courts.length;
+
+  let html = '<thead><tr><th class="corner">时间</th>';
+  CONFIG.courts.forEach(c => { html += `<th>${c}</th>`; });
+  html += '</tr></thead><tbody>';
+
+  HOURS.forEach(h => {
+    html += `<tr><td class="time">${fmt(h)}</td>`;
+    for (let ci = 0; ci < n; ci++) {
+      html += '<td class="hour"><div class="halves">';
+      for (let k = 0; k < 2; k++) {                 // 前半小时 / 后半小时
+        const min = h + k * CONFIG.slotMin;
+        if (min >= CONFIG.closeHour * 60) {
+          html += '<div class="half" style="visibility:hidden"></div>';
+          continue;
+        }
+        const key = keyOf(ci, min);
+        const st = slotStatus(currentDay, ci, min);
+        let cls = 'half', label = priceFor(currentDay, ci, min);
+
+        if (st === 'past')            { cls += ' past';      label = '—'; }
+        else if (st === CONFIRMED)    { cls += ' confirmed'; label = '满'; }
+        else if (st === PENDING)      { cls += ' pending';   label = '待'; }
+        else if (selection.has(key))   cls += ' selected';
+
+        const off = st !== 'free' ? ' data-off="1"' : '';
+        html += `<div class="${cls}" data-key="${key}"${off}>${label}</div>`;
+      }
+      html += '</div></td>';
+    }
+    html += '</tr>';
+  });
+
+  $('grid').innerHTML = html + '</tbody>';
+  $('grid').style.minWidth = (56 + n * 70) + 'px';
+
+  $('grid').querySelectorAll('.half:not([data-off])').forEach(el => {
+    el.onclick = () => toggle(el.dataset.key, el);
+  });
+
+  renderFooter();
+}
+
+/* ── 选中切换 ───────────────────────────────────── */
+function toggle(key, el) {
+  const [ci, , min] = key.split('|').map(Number);
+  if (selection.has(key)) {
+    selection.delete(key);
+    el.classList.remove('selected');
+    el.textContent = priceFor(currentDay, ci, min);
+  } else {
+    selection.add(key);
+    el.classList.add('selected');
+  }
+  renderFooter();
+}
+
+/* ── 汇总 ───────────────────────────────────────── */
+function pickedOf(dayIdx) {
+  return [...selection]
+    .map(k => { const [ci, day, min] = k.split('|').map(Number); return { ci, day, min }; })
+    .filter(p => p.day === dayIdx);
+}
+
+function groups() { return groupSlots(pickedOf(currentDay)); }
+
+/** 逐格累加，跨价格档也正确 */
+function groupPrice(g) {
+  let sum = 0;
+  for (let m = g.from; m < g.to; m += CONFIG.slotMin) sum += priceFor(currentDay, g.ci, m);
+  return sum;
+}
+
+const totalPrice = () => groups().reduce((s, g) => s + groupPrice(g), 0);
+
+/* ── 底部栏 ─────────────────────────────────────── */
+function renderFooter() {
+  const gs = groups();
+  const info = $('footerInfo');
+  const btn = $('submitBtn');
+
+  if (!gs.length) {
+    info.innerHTML = '<div class="empty">请选择时段</div>';
+    btn.disabled = true;
+    return;
+  }
+
+  const lines = gs.map(g =>
+    `<div><b>${g.court}</b> ${fmt(g.from)}–${fmt(g.to)}</div>`).join('');
+  const count = pickedOf(currentDay).length;
+
+  info.innerHTML =
+    `<div class="lines">${lines}</div>
+     <div class="total">共 ${count} 个时段 · 合计 <em>¥${totalPrice()}</em></div>`;
+  btn.disabled = false;
+}
+
+/* ── 提交 ───────────────────────────────────────── */
+$('submitBtn').onclick = () => {
+  const gs = groups();
+  $('sheetSummary').innerHTML =
+    gs.map(g => `<div class="r"><span>${g.court} ${fmt(g.from)}–${fmt(g.to)}</span>
+                 <b>¥${groupPrice(g)}</b></div>`).join('') +
+    `<div class="r tot"><span>合计</span><b>¥${totalPrice()}</b></div>`;
+  $('mask').classList.add('show');
+};
+
+$('cancelBtn').onclick = () => $('mask').classList.remove('show');
+
+$('confirmBtn').onclick = () => {
+  const phone = $('phone').value.trim();
+  if (!/^1[3-9]\d{9}$/.test(phone)) {
+    $('phoneErr').classList.add('show');
+    $('phone').focus();
+    return;
+  }
+  $('phoneErr').classList.remove('show');
+
+  // 提交前重新校验：从页面渲染到现在，选中的格子可能已被别人订走
+  const taken = [...selection].filter(k => {
+    const [ci, , min] = k.split('|').map(Number);
+    return slotStatus(currentDay, ci, min) !== 'free';
+  });
+
+  $('mask').classList.remove('show');
+
+  if (taken.length) {
+    taken.forEach(k => selection.delete(k));
+    const gs = groups();
+    if (gs.length) {
+      renderGrid();
+      toast('部分时段刚被订走，已为你剔除，其余时段仍可继续提交');
+    } else {
+      selection.clear();
+      renderGrid();
+      toast('抱歉，你选的时段刚被订走了，请重新选择');
+    }
+    return;
+  }
+
+  const res = createBooking({
+    dayIdx: currentDay,
+    groups: groups(),
+    phone,
+    name: $('name').value.trim(),
+    note: $('note').value.trim(),
+  });
+
+  selection.clear();
+  renderGrid();
+
+  // 兜底：落单那一刻仍有格子被占（极端并发），createBooking 会剔除
+  if (!res.ok) {
+    toast('抱歉，你选的时段刚被订走了，请重新选择');
+    return;
+  }
+  if (res.skipped.length) toast('部分时段刚被订走，已为你剔除，其余已提交');
+
+  $('doneText').textContent =
+    `预约已提交，我们会尽快致电 ${phone.slice(0, 3)}****${phone.slice(-4)} 与您确认`;
+  $('done').classList.add('show');
+};
+
+$('againBtn').onclick = () => {
+  selection.clear();
+  ['phone', 'name', 'note'].forEach(id => { $(id).value = ''; });
+  $('done').classList.remove('show');
+  renderGrid();
+};
+
+$('phone').addEventListener('input', e => {
+  e.target.value = e.target.value.replace(/\D/g, '');
+  $('phoneErr').classList.remove('show');
+});
+
+/* ── 轻提示 ─────────────────────────────────────── */
+let toastTimer;
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+/* ── 启动 ───────────────────────────────────────── */
+seedDemoBookings();
+renderDates();
+renderGrid();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,67 @@
+<view class="page">
+
+  <!-- 顶部 -->
+  <view class="topbar">
+    <view class="tb-left">
+      <view class="title">预约管理</view>
+      <view class="sub">确认后请致电客人，再点「确认」</view>
+    </view>
+    <view class="tb-right" bindtap="goPricing">改价格</view>
+  </view>
+
+  <!-- 分页 -->
+  <view class="tabs">
+    <view
+      wx:for="{{tabs}}"
+      wx:key="key"
+      class="tab {{item.on ? 'on' : ''}}"
+      data-key="{{item.key}}"
+      bindtap="onTapTab">
+      <text>{{item.text}}</text>
+      <text class="cnt num">{{item.count}}</text>
+    </view>
+  </view>
+
+  <!-- 列表 -->
+  <scroll-view class="list" scroll-y>
+    <view wx:if="{{empty}}" class="empty">
+      <view class="empty-icon">—</view>
+      <view class="empty-text">这里还没有记录</view>
+    </view>
+
+    <view
+      wx:for="{{list}}"
+      wx:key="id"
+      class="card {{item.urgent ? 'urgent' : ''}}">
+
+      <view class="c-head" data-id="{{item.id}}" bindtap="onTapCard">
+        <view class="{{item.badgeCls}}">{{item.badgeText}}</view>
+        <view class="c-date num">{{item.dateText}}</view>
+        <view class="c-total num">¥{{item.total}}</view>
+      </view>
+
+      <view class="c-body" data-id="{{item.id}}" bindtap="onTapCard">
+        <view class="c-line">
+          <text class="c-court">{{item.courtText}}</text>
+          <text class="c-time num">{{item.timeText}}</text>
+        </view>
+        <view class="c-line">
+          <text class="c-name">{{item.name}}</text>
+          <text class="c-phone num" data-phone="{{item.phone}}" catchtap="onCall">{{item.phone}}</text>
+        </view>
+        <view wx:if="{{item.note}}" class="c-note">备注：{{item.note}}</view>
+        <view class="c-meta">{{item.createdText}}提交</view>
+      </view>
+
+      <view class="c-acts">
+        <view class="act" data-phone="{{item.phone}}" catchtap="onCall">拨号</view>
+        <view wx:if="{{item.canConfirm}}" class="act primary" data-id="{{item.id}}" catchtap="onConfirm">确认</view>
+        <view wx:if="{{item.canCancel}}" class="act danger" data-id="{{item.id}}" catchtap="onCancel">取消</view>
+        <view wx:if="{{item.canRestore}}" class="act" data-id="{{item.id}}" catchtap="onRestore">恢复</view>
+      </view>
+    </view>
+
+    <view class="list-pad"></view>
+  </scroll-view>
+
+</view>

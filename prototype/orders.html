@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>预约管理 · 管理端</title>
+<style>
+  :root{
+    --blue:#1989FA; --blue-soft:#E8F3FF;
+    --green:#07C160; --green-soft:#E8F8EF;
+    --orange:#FF9500; --red:#FA5151;
+    --bg:#F2F3F5; --text:#1A1A1A; --text-sub:#8A8A8A; --border:#EDEDED;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    background:#E9EAEC;color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue","Microsoft YaHei",sans-serif;
+    display:flex;align-items:center;justify-content:center;
+  }
+
+  .phone{
+    width:100%;max-width:420px;height:100dvh;max-height:900px;
+    background:var(--bg);display:flex;flex-direction:column;overflow:hidden;
+    box-shadow:0 12px 48px rgba(0,0,0,.18);position:relative;
+  }
+  @media(min-width:520px){ .phone{border-radius:22px;} }
+
+  /* ── 顶部 ─────────────────────────────────── */
+  .topbar{background:#fff;padding:14px 16px 10px;border-bottom:1px solid var(--border);flex:none;}
+  .tb-head{display:flex;align-items:center;gap:10px;}
+  .tb-head h1{margin:0;font-size:17px;font-weight:600;}
+  .topbar .sub{margin-top:4px;font-size:11.5px;color:var(--text-sub);line-height:1.5;}
+  .navlink{
+    margin-left:auto;font-size:12.5px;color:var(--blue);text-decoration:none;
+    border:1px solid var(--blue);border-radius:999px;padding:5px 12px;
+    white-space:nowrap;transition:background .14s;
+  }
+  .navlink:hover{background:var(--blue-soft);}
+
+  /* ── 标签页 ───────────────────────────────── */
+  .tabs{display:flex;background:#fff;flex:none;border-bottom:1px solid var(--border);}
+  .tab{
+    flex:1;text-align:center;padding:12px 4px;font-size:13.5px;color:var(--text-sub);
+    cursor:pointer;position:relative;transition:color .15s;user-select:none;
+  }
+  .tab b{
+    font-weight:600;font-variant-numeric:tabular-nums;
+  }
+  .tab.active{color:var(--blue);font-weight:600;}
+  .tab.active::after{
+    content:'';position:absolute;left:50%;bottom:0;transform:translateX(-50%);
+    width:32px;height:2.5px;background:var(--blue);border-radius:2px;
+  }
+  .tab .n{
+    display:inline-flex;align-items:center;justify-content:center;
+    min-width:17px;height:17px;padding:0 5px;margin-left:3px;
+    background:#E4E4E4;color:#8A8A8A;border-radius:999px;
+    font-size:10.5px;font-weight:600;vertical-align:1px;
+  }
+  .tab.active .n{background:var(--blue);color:#fff;}
+  .tab .n.alert{background:var(--red);color:#fff;}
+
+  /* ── 列表 ─────────────────────────────────── */
+  .list{flex:1;overflow-y:auto;padding:12px 16px calc(16px + env(safe-area-inset-bottom));}
+  .list::-webkit-scrollbar{width:0;}
+
+  .card{
+    background:#fff;border-radius:13px;padding:0;margin-bottom:11px;
+    box-shadow:0 1px 3px rgba(0,0,0,.05);overflow:hidden;
+  }
+
+  .card-head{
+    display:flex;align-items:center;gap:8px;padding:12px 14px 10px;
+  }
+  .badge{
+    font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;
+  }
+  .badge.pending{background:#FFF7E6;color:#D9A441;}
+  .badge.confirmed{background:var(--green-soft);color:#0B8A45;}
+  .badge.cancelled{background:#F2F2F2;color:#9A9A9A;}
+  .card-head .total{
+    margin-left:auto;font-size:16px;font-weight:700;color:var(--orange);
+    font-variant-numeric:tabular-nums;
+  }
+  .card-head .total s{
+    font-size:11px;font-weight:400;color:var(--text-sub);
+    text-decoration:none;margin-right:1px;
+  }
+
+  .card-body{padding:0 14px 12px;}
+  .when{
+    display:flex;align-items:center;gap:7px;font-size:14.5px;font-weight:600;
+    margin-bottom:8px;
+  }
+  .when .today-tag{
+    font-size:10px;font-weight:600;background:var(--red);color:#fff;
+    padding:2px 6px;border-radius:5px;letter-spacing:.3px;
+  }
+  .when .ago{
+    margin-left:auto;font-size:11px;font-weight:400;color:#B8B8B8;
+  }
+
+  .slot-line{
+    display:flex;align-items:center;gap:10px;font-size:13.5px;
+    padding:4px 0;color:var(--text);
+  }
+  .slot-line .court{
+    background:var(--blue-soft);color:var(--blue);font-size:11.5px;font-weight:600;
+    padding:2px 7px;border-radius:5px;flex:none;
+  }
+  .slot-line .tm{font-variant-numeric:tabular-nums;color:var(--text);}
+  .slot-line .pr{
+    margin-left:auto;color:var(--text-sub);font-size:12.5px;
+    font-variant-numeric:tabular-nums;
+  }
+
+  .contact{
+    display:flex;align-items:center;gap:9px;margin-top:10px;
+    padding-top:10px;border-top:1px dashed #EBEBEB;font-size:13px;
+  }
+  .contact .nm{font-weight:600;}
+  .contact .ph{
+    color:var(--text-sub);font-variant-numeric:tabular-nums;letter-spacing:.3px;
+  }
+  .call{
+    margin-left:auto;flex:none;text-decoration:none;
+    border:1px solid var(--green);color:var(--green);background:#fff;
+    border-radius:999px;padding:5px 13px;font-size:12.5px;font-weight:600;
+    transition:background .14s;
+  }
+  .call:hover{background:var(--green-soft);}
+
+  .note{
+    margin-top:9px;background:#FAFAFA;border-radius:8px;padding:8px 10px;
+    font-size:12.5px;color:#5A5A5A;line-height:1.55;
+  }
+  .note::before{content:'备注　';color:#B0B0B0;font-size:11.5px;}
+
+  .card-actions{
+    display:flex;gap:9px;padding:11px 14px;
+    border-top:1px solid #F4F4F4;background:#FCFCFC;
+  }
+  .btn-sm{
+    flex:1;border:1px solid var(--border);background:#fff;color:var(--text);
+    border-radius:9px;padding:9px;font-size:13.5px;font-family:inherit;
+    cursor:pointer;transition:all .14s;white-space:nowrap;
+  }
+  .btn-sm:hover{border-color:#D0D0D0;}
+  .btn-sm.pri{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600;}
+  .btn-sm.pri:hover{background:#0F7AE5;}
+  .btn-sm.danger{color:var(--red);}
+  .btn-sm.danger:hover{border-color:var(--red);background:#FFF5F5;}
+  .btn-sm:disabled{opacity:.5;cursor:not-allowed;}
+
+  /* ── 空状态 ───────────────────────────────── */
+  .empty{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:70px 30px;text-align:center;color:var(--text-sub);
+  }
+  .empty .ico{
+    width:56px;height:56px;border-radius:50%;background:#EDEDED;
+    display:flex;align-items:center;justify-content:center;margin-bottom:14px;
+  }
+  .empty .ico svg{width:26px;height:26px;stroke:#C0C0C0;}
+  .empty p{margin:0;font-size:13.5px;line-height:1.7;}
+
+  /* ── 提示 ─────────────────────────────────── */
+  .toast{
+    position:absolute;left:50%;bottom:40px;transform:translate(-50%,10px);
+    background:rgba(0,0,0,.82);color:#fff;font-size:13px;
+    padding:10px 18px;border-radius:10px;opacity:0;pointer-events:none;
+    transition:opacity .22s,transform .22s;z-index:30;
+    max-width:82%;text-align:center;line-height:1.5;
+  }
+  .toast.show{opacity:1;transform:translate(-50%,0);}
+</style>
+</head>
+<body>
+
+<div class="phone">
+
+  <div class="topbar">
+    <div class="tb-head">
+      <h1>预约管理</h1>
+      <a class="navlink" href="admin.html">价格管理</a>
+    </div>
+    <div class="sub">接到预约后请先电话核实，再点确认</div>
+  </div>
+
+  <div class="tabs" id="tabs">
+    <div class="tab active" data-status="pending">待确认<span class="n" id="nPending">0</span></div>
+    <div class="tab" data-status="confirmed">已确认<span class="n" id="nConfirmed">0</span></div>
+    <div class="tab" data-status="cancelled">已取消<span class="n" id="nCancelled">0</span></div>
+  </div>
+
+  <div class="list" id="list"></div>
+
+  <div class="toast" id="toast"></div>
+
+</div>
+
+<script src="core.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+let currentTab = PENDING;
+
+/* ── 标签切换 ───────────────────────────────────── */
+$('tabs').addEventListener('click', e => {
+  const tab = e.target.closest('.tab');
+  if (!tab) return;
+  currentTab = tab.dataset.status;
+  document.querySelectorAll('.tab').forEach(t =>
+    t.classList.toggle('active', t === tab));
+  renderList();
+});
+
+/* ── 渲染 ───────────────────────────────────────── */
+function renderCounts() {
+  const p = countByStatus(PENDING);
+  $('nPending').textContent = p;
+  $('nPending').classList.toggle('alert', p > 0);
+  $('nConfirmed').textContent = countByStatus(CONFIRMED);
+  $('nCancelled').textContent = countByStatus(CANCELLED);
+}
+
+function renderList() {
+  const list = bookingsByStatus(currentTab);
+  $('list').innerHTML = list.length ? list.map(card).join('') : emptyState();
+  renderCounts();
+}
+
+function emptyState() {
+  const msg = {
+    [PENDING]:   '没有待确认的预约',
+    [CONFIRMED]: '还没有已确认的预约',
+    [CANCELLED]: '没有已取消的预约',
+  }[currentTab];
+  return `<div class="empty">
+    <div class="ico">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="18" rx="2"></rect>
+        <line x1="16" y1="2" x2="16" y2="6"></line>
+        <line x1="8" y1="2" x2="8" y2="6"></line>
+        <line x1="3" y1="10" x2="21" y2="10"></line>
+      </svg>
+    </div>
+    <p>${msg}</p>
+  </div>`;
+}
+
+function card(b) {
+  const slots = b.items.map(it => `
+    <div class="slot-line">
+      <span class="court">${it.court}</span>
+      <span class="tm">${fmt(it.from)}–${fmt(it.to)}</span>
+      <span class="pr">¥${it.price}</span>
+    </div>`).join('');
+
+  // 已取消的单不显示操作按钮
+  let actions = '';
+  if (b.status === PENDING) {
+    actions = `
+      <div class="card-actions">
+        <a class="btn-sm" href="tel:${b.phone}" style="text-align:center;text-decoration:none;line-height:1.5">拨打电话</a>
+        <button class="btn-sm danger" data-act="cancel" data-id="${b.id}">取消</button>
+        <button class="btn-sm pri" data-act="confirm" data-id="${b.id}">确认预约</button>
+      </div>`;
+  } else if (b.status === CONFIRMED) {
+    actions = `
+      <div class="card-actions">
+        <a class="btn-sm" href="tel:${b.phone}" style="text-align:center;text-decoration:none;line-height:1.5">拨打电话</a>
+        <button class="btn-sm danger" data-act="cancel" data-id="${b.id}">取消预约</button>
+      </div>`;
+  } else if (b.reply) {
+    actions = `<div class="card-actions"><span style="font-size:12.5px;color:#9A9A9A">${b.reply}</span></div>`;
+  }
+
+  return `<div class="card">
+    <div class="card-head">
+      <span class="badge ${b.status}">${STATUS_TEXT[b.status]}</span>
+      <span class="total"><s>¥</s>${b.total}</span>
+    </div>
+    <div class="card-body">
+      <div class="when">
+        ${prettyDateKey(b.dateKey)}
+        ${isToday(b.dateKey) ? '<span class="today-tag">今天</span>' : ''}
+        <span class="ago">${timeAgo(b.createdAt)}提交</span>
+      </div>
+      ${slots}
+      <div class="contact">
+        <span class="nm">${b.name || '未留称呼'}</span>
+        <span class="ph">${b.phone}</span>
+        ${b.status !== CANCELLED
+          ? `<a class="call" href="tel:${b.phone}">拨打</a>` : ''}
+      </div>
+      ${b.note ? `<div class="note">${escapeHtml(b.note)}</div>` : ''}
+    </div>
+    ${actions}
+  </div>`;
+}
+
+const escapeHtml = s => s.replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* ── 操作 ───────────────────────────────────────── */
+$('list').addEventListener('click', e => {
+  const btn = e.target.closest('[data-act]');
+  if (!btn) return;
+  const { act, id } = btn.dataset;
+  const b = findBooking(id);
+  if (!b) return;
+
+  if (act === 'confirm') {
+    confirmBooking(id, '电话已确认');
+    toast(`已确认 ${b.name || b.phone} 的预约，记得通知客人`);
+  } else if (act === 'cancel') {
+    if (b.status === CONFIRMED &&
+        !confirm(`确定取消 ${b.name || b.phone} 的预约吗？\n取消后该时段会立刻释放，其他人可以预约。`)) {
+      return;
+    }
+    cancelBooking(id, b.status === PENDING ? '已取消' : '老板取消');
+    toast('已取消，该时段已释放');
+  }
+  renderList();
+});
+
+/* ── 提示 ───────────────────────────────────────── */
+let toastTimer;
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+/* ── 启动 ───────────────────────────────────────── */
+seedDemoBookings();
+renderList();
+
+if (!STORAGE_OK) {
+  toast('当前环境不支持本地存储，数据无法跨页面保存');
+}
+</script>
+
+</body>
+</html>

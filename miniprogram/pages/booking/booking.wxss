@@ -1,0 +1,225 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #F2F3F5;
+}
+
+/* ── 顶部 ───────────────────────────────────── */
+.topbar {
+  background: #fff;
+  padding: 24rpx 32rpx 18rpx;
+  border-bottom: 1rpx solid #EDEDED;
+  flex: none;
+}
+.topbar .title {
+  font-size: 34rpx;
+  font-weight: 600;
+}
+.topbar .sub {
+  margin-top: 6rpx;
+  font-size: 23rpx;
+  color: #8A8A8A;
+  line-height: 1.5;
+}
+
+/* ── 日期条 ─────────────────────────────────── */
+.datebar {
+  background: #fff;
+  padding: 20rpx 32rpx;
+  border-bottom: 1rpx solid #EDEDED;
+  flex: none;
+  white-space: nowrap;
+}
+.date {
+  display: inline-block;
+  min-width: 116rpx;
+  padding: 14rpx 8rpx;
+  margin-right: 16rpx;
+  border-radius: 20rpx;
+  background: #F2F3F5;
+  text-align: center;
+  border: 1rpx solid transparent;
+}
+.date:last-child { margin-right: 0; }
+.date.active {
+  background: #07C160;
+  border-color: #07C160;
+}
+.date .dow {
+  font-size: 22rpx;
+  color: #8A8A8A;
+  line-height: 1.3;
+}
+.date .dnum {
+  font-size: 30rpx;
+  font-weight: 600;
+  margin-top: 4rpx;
+  line-height: 1.2;
+}
+.date.active .dow,
+.date.active .dnum { color: #fff; }
+
+/* ── 图例 ───────────────────────────────────── */
+.legend {
+  display: flex;
+  gap: 22rpx;
+  padding: 14rpx 32rpx;
+  background: #fff;
+  border-bottom: 1rpx solid #EDEDED;
+  flex: none;
+}
+.legend .lg {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  font-size: 21rpx;
+  color: #8A8A8A;
+}
+.dot {
+  width: 20rpx;
+  height: 20rpx;
+  border-radius: 6rpx;
+  flex: none;
+}
+.dot.free    { background: #fff; border: 1rpx solid #D6D6D6; }
+.dot.sel     { background: #07C160; }
+.dot.pending { background: #FFF3DC; border: 1rpx solid #F0D9AE; }
+.dot.booked  { background: #F1F1F1; }
+.dot.past    { background: #F0F1F2; border: 1rpx solid #DCDCDC; }
+
+/* ── 提示条 ─────────────────────────────────── */
+/* 只在「今天有一部分已经过去」或「整天都满了」时出现。
+   没有它，客人会以为灰格子是界面坏了。 */
+.hint {
+  flex: none;
+  background: #FFF8E8;
+  color: #A9760F;
+  font-size: 22rpx;
+  line-height: 1.5;
+  padding: 12rpx 32rpx;
+  border-bottom: 1rpx solid #F5E6C8;
+}
+
+/* ── 表头 ───────────────────────────────────── */
+.grid-head {
+  display: flex;
+  background: #fff;
+  border-bottom: 1rpx solid #EDEDED;
+  flex: none;
+}
+.grid-head .th {
+  height: 74rpx;
+  line-height: 74rpx;
+  text-align: center;
+  font-size: 25rpx;
+  font-weight: 600;
+  border-right: 1rpx solid #EDEDED;
+}
+.grid-head .corner {
+  width: 108rpx;
+  flex: none;
+  font-size: 22rpx;
+  font-weight: 400;
+  color: #8A8A8A;
+}
+.grid-head .court {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── 网格 ───────────────────────────────────── */
+.grid-scroll {
+  flex: 1;
+  background: #fff;
+  min-height: 0;
+}
+.grid-row {
+  display: flex;
+  border-bottom: 1rpx solid #EDEDED;
+}
+.grid-row .td {
+  height: 92rpx;
+  border-right: 1rpx solid #EDEDED;
+}
+.grid-row .time {
+  width: 108rpx;
+  flex: none;
+  line-height: 92rpx;
+  text-align: center;
+  font-size: 24rpx;
+  color: #8A8A8A;
+  font-weight: 500;
+}
+/* 一格 = 一小时。客人只能整小时整小时地订，
+   所以这里不再拆成两个半小时的小格 —— 那样看着太碎。 */
+.cell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #07C160;
+}
+
+.cell.selected {
+  background: #07C160;
+  color: #fff;
+}
+.cell.confirmed {
+  background: #F1F1F1;
+  color: #B4B4B4;
+  font-weight: 400;
+}
+.cell.pending {
+  background: #FFF7E6;
+  color: #E8A33D;
+  font-weight: 400;
+}
+/* 已过时段。这里要「看得清的灰」，不能太淡 ——
+   太淡会被当成「没价格的空白格」，客人会以为界面坏了。
+   同时要比可约的绿色明显弱，让人一眼知道是关着的。 */
+.cell.past {
+  background: #F7F8F9;
+  color: #AEAEAE;
+  font-weight: 400;
+}
+
+/* ── 底部结算 ───────────────────────────────── */
+.footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 24rpx;
+  padding: 22rpx 32rpx;
+  padding-bottom: calc(22rpx + env(safe-area-inset-bottom));
+  background: #fff;
+  border-top: 1rpx solid #EDEDED;
+  box-shadow: 0 -2rpx 24rpx rgba(0, 0, 0, .04);
+}
+.finfo { flex: 1; min-width: 0; }
+.flines { max-height: 76rpx; overflow: hidden; }
+.fline {
+  font-size: 24rpx;
+  line-height: 1.6;
+  color: #8A8A8A;
+  display: flex;
+  gap: 12rpx;
+}
+.fline .fcourt { color: #1A1A1A; font-weight: 600; }
+.ftotal {
+  margin-top: 4rpx;
+  font-size: 24rpx;
+  color: #8A8A8A;
+}
+.ftotal .price {
+  font-size: 38rpx;
+  font-weight: 700;
+  color: #FF9500;
+}
+.fempty {
+  font-size: 25rpx;
+  color: #8A8A8A;
+}

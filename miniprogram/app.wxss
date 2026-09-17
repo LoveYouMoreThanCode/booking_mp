@@ -1,0 +1,58 @@
+/* 全局样式 */
+page {
+  background: #F2F3F5;
+  color: #1A1A1A;
+  font-size: 28rpx;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+view, text, button, input, textarea {
+  box-sizing: border-box;
+}
+
+/* 数字等宽，避免价格跳动 */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 通用按钮 */
+.btn {
+  border-radius: 999rpx;
+  background: #07C160;
+  color: #fff;
+  font-size: 30rpx;
+  font-weight: 600;
+  padding: 22rpx 52rpx;
+  line-height: 1.2;
+  border: none;
+}
+
+.btn::after {
+  border: none;
+}
+
+.btn[disabled] {
+  background: #D8D8D8 !important;
+  color: #fff !important;
+}
+
+.btn-ghost {
+  border-radius: 999rpx;
+  background: #fff;
+  color: #1A1A1A;
+  font-size: 30rpx;
+  padding: 22rpx;
+  line-height: 1.2;
+  border: 1rpx solid #EDEDED;
+}
+
+.btn-ghost::after {
+  border: none;
+}
+
+/* 底部安全区 */
+.safe-bottom {
+  padding-bottom: constant(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom);
+}

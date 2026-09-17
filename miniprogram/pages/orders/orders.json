@@ -1,0 +1,8 @@
+{
+  "navigationBarTitleText": "预约管理",
+  "navigationBarBackgroundColor": "#ffffff",
+  "navigationBarTextStyle": "black",
+  "backgroundColor": "#F2F3F5",
+  "enablePullDownRefresh": true,
+  "usingComponents": {}
+}

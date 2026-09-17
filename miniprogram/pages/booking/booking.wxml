@@ -1,0 +1,76 @@
+<view class="page">
+
+  <!-- 顶部 -->
+  <view class="topbar">
+    <view class="title" bindlongpress="onLongPressTitle">羽毛球场地预约</view>
+    <view class="sub">选择场地与时段，提交后我们会电话与您确认</view>
+  </view>
+
+  <!-- 日期条 -->
+  <scroll-view class="datebar" scroll-x enable-flex>
+    <view
+      wx:for="{{dates}}"
+      wx:key="idx"
+      class="date {{item.active ? 'active' : ''}}"
+      data-idx="{{item.idx}}"
+      bindtap="onTapDate">
+      <view class="dow">{{item.dow}}</view>
+      <view class="dnum">{{item.num}}</view>
+    </view>
+  </scroll-view>
+
+  <!-- 图例 -->
+  <view class="legend">
+    <view class="lg"><view class="dot free"></view><text>可约</text></view>
+    <view class="lg"><view class="dot sel"></view><text>已选</text></view>
+    <view class="lg"><view class="dot pending"></view><text>确认中</text></view>
+    <view class="lg"><view class="dot booked"></view><text>已约满</text></view>
+    <view class="lg"><view class="dot past"></view><text>已过</text></view>
+  </view>
+
+  <!-- 灰格子为什么灰 -->
+  <view wx:if="{{dayHint}}" class="hint">{{dayHint}}</view>
+
+  <!-- 表头（固定在网格上方，不随滚动消失） -->
+  <view class="grid-head">
+    <view class="th corner">时间</view>
+    <view class="th court" wx:for="{{courtNames}}" wx:key="*this">{{item}}</view>
+  </view>
+
+  <!-- 网格 -->
+  <scroll-view class="grid-scroll" scroll-y>
+    <view class="grid-row" wx:for="{{gridRows}}" wx:for-index="ri" wx:key="label">
+      <view class="td time num">{{item.label}}</view>
+      <view
+        wx:for="{{item.courts}}"
+        wx:for-index="ci"
+        wx:for-item="c"
+        wx:key="key"
+        class="td {{c.cls}}"
+        data-ri="{{ri}}"
+        data-ci="{{ci}}"
+        data-key="{{c.key}}"
+        bindtap="onTapCell">{{c.text}}</view>
+    </view>
+  </scroll-view>
+
+  <!-- 底部结算 -->
+  <view class="footer">
+    <view class="finfo">
+      <block wx:if="{{hasSelection}}">
+        <view class="flines">
+          <view class="fline" wx:for="{{footLines}}" wx:key="time">
+            <text class="fcourt">{{item.court}}</text>
+            <text class="ftime num">{{item.time}}</text>
+          </view>
+        </view>
+        <view class="ftotal">
+          共 {{footHours}} 小时 · 合计 <text class="price num">¥{{footTotal}}</text>
+        </view>
+      </block>
+      <view wx:else class="fempty">点击格子选择时段</view>
+    </view>
+    <button class="btn" disabled="{{!hasSelection}}" bindtap="onSubmit">提交预约</button>
+  </view>
+
+</view>

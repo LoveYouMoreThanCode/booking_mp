@@ -1,0 +1,133 @@
+/* 普通页面，没有 fixed 弹层、没有内层 scroll-view。
+   输入框就在文档流里 —— 这正是把填写页从弹层搬出来的原因。 */
+.page {
+  min-height: 100vh;
+  background: #F2F3F5;
+  padding: 24rpx 24rpx calc(40rpx + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+/* ── 选好的时段 ─────────────────────────────── */
+.card {
+  background: #fff;
+  border-radius: 20rpx;
+  padding: 26rpx 30rpx;
+  margin-bottom: 24rpx;
+}
+.card-hd {
+  font-size: 24rpx;
+  color: #8A8A8A;
+  margin-bottom: 14rpx;
+}
+.srow {
+  display: flex;
+  justify-content: space-between;
+  gap: 20rpx;
+  font-size: 27rpx;
+  line-height: 1.8;
+  color: #1A1A1A;
+}
+.srow.stot {
+  margin-top: 14rpx;
+  padding-top: 14rpx;
+  border-top: 1rpx solid #EDEDED;
+  font-weight: 600;
+}
+.srow.stot .num {
+  font-size: 34rpx;
+  font-weight: 700;
+  color: #FF9500;
+}
+
+/* ── 表单 ───────────────────────────────────── */
+.form {
+  background: #fff;
+  border-radius: 20rpx;
+  padding: 30rpx 30rpx 6rpx;
+}
+.field { margin-bottom: 30rpx; }
+.field .label {
+  font-size: 26rpx;
+  font-weight: 600;
+  margin-bottom: 12rpx;
+}
+.field .label .req { color: #FA5151; margin-left: 4rpx; }
+
+/* 三个框共用一条规则（原因见 contact.wxml 的说明）。
+   高度写死，不用 auto-height —— 备注框在这台机器上一直是好的，
+   别把「有明确 height」这条差别丢掉。 */
+.textarea {
+  width: 100%;
+  border: 1rpx solid #EDEDED;
+  border-radius: 18rpx;
+  padding: 22rpx 24rpx;
+  font-size: 30rpx;
+  line-height: 1.4;
+  color: #1A1A1A;
+  background: #FAFAFA;
+  height: 140rpx;
+}
+
+.field .tip {
+  font-size: 23rpx;
+  color: #8A8A8A;
+  margin-top: 10rpx;
+}
+.field .err {
+  font-size: 25rpx;
+  color: #FA5151;
+  margin-top: 10rpx;
+}
+
+.acts { margin-top: 36rpx; }
+.sub-tip {
+  margin-top: 20rpx;
+  font-size: 23rpx;
+  color: #8A8A8A;
+  text-align: center;
+  line-height: 1.6;
+}
+
+/* ── 成功页 ─────────────────────────────────── */
+.done {
+  padding: 120rpx 40rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.done .ring {
+  width: 136rpx;
+  height: 136rpx;
+  border-radius: 50%;
+  background: #E8F8EF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 36rpx;
+}
+.done .check {
+  width: 44rpx;
+  height: 22rpx;
+  border-left: 6rpx solid #07C160;
+  border-bottom: 6rpx solid #07C160;
+  transform: rotate(-45deg) translate(4rpx, -6rpx);
+}
+.done-title { font-size: 38rpx; font-weight: 600; margin-bottom: 16rpx; }
+.done-text {
+  font-size: 27rpx;
+  color: #8A8A8A;
+  line-height: 1.7;
+  max-width: 560rpx;
+}
+.done .btn-again {
+  margin-top: 48rpx;
+  border: 1rpx solid #07C160;
+  color: #07C160;
+  background: #fff;
+  border-radius: 999rpx;
+  padding: 20rpx 52rpx;
+  font-size: 28rpx;
+  line-height: 1.2;
+}
+.done .btn-again::after { border: none; }

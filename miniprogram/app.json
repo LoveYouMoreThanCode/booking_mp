@@ -1,0 +1,18 @@
+{
+  "pages": [
+    "pages/booking/booking",
+    "pages/contact/contact",
+    "pages/orders/orders",
+    "pages/pricing/pricing"
+  ],
+  "window": {
+    "backgroundTextStyle": "dark",
+    "navigationBarBackgroundColor": "#FFFFFF",
+    "navigationBarTitleText": "羽毛球场地预约",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#F2F3F5"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}

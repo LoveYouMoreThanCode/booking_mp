@@ -1,0 +1,95 @@
+<view class="page">
+
+  <!-- 顶部 -->
+  <view class="topbar">
+    <view class="tb-left">
+      <view class="title">价格设置</view>
+      <view class="sub">
+        点格子选中（可多选）；点场地名选整列，点时间选整行
+      </view>
+    </view>
+    <view class="tb-right" bindtap="onResetAll">清空数据</view>
+  </view>
+
+  <!-- 日期条 -->
+  <scroll-view class="datebar" scroll-x enable-flex>
+    <view
+      wx:for="{{dates}}"
+      wx:key="idx"
+      class="date {{item.active ? 'active' : ''}}"
+      data-idx="{{item.idx}}"
+      bindtap="onTapDate">
+      <view class="dow">{{item.dow}}</view>
+      <view class="dnum">{{item.num}}</view>
+    </view>
+  </scroll-view>
+
+  <!-- 图例 -->
+  <view class="legend">
+    <view class="lg"><view class="dot rule"></view><text>规则价</text></view>
+    <view class="lg"><view class="dot ov"></view><text>已手改</text></view>
+    <view class="lg"><view class="dot sel"></view><text>已选中</text></view>
+    <text class="lg-note">本日已手改 {{overrideCount}} 格</text>
+  </view>
+
+  <!-- 表头：点场地名 = 选中整列 -->
+  <view class="grid-head">
+    <view class="th corner">时间</view>
+    <view
+      class="th court"
+      wx:for="{{courtNames}}"
+      wx:for-index="ci"
+      wx:key="*this"
+      data-ci="{{ci}}"
+      bindtap="onTapCourtHead">{{item}}</view>
+  </view>
+
+  <!-- 网格 -->
+  <scroll-view class="grid-scroll" scroll-y>
+    <!-- 点时间 = 选中整行 -->
+    <view class="grid-row" wx:for="{{gridRows}}" wx:for-index="ri" wx:key="label">
+      <view class="td time num" data-min="{{item.min}}" bindtap="onTapRowLabel">{{item.label}}</view>
+      <block wx:for="{{item.courts}}" wx:for-index="ci" wx:for-item="court" wx:key="ci">
+        <view class="td hour">
+          <block wx:for="{{court.halves}}" wx:for-index="hi" wx:for-item="h" wx:key="key">
+            <view class="{{h.cls}}" data-key="{{h.key}}" bindtap="onTapHalf">{{h.text}}</view>
+          </block>
+        </view>
+      </block>
+    </view>
+    <view class="grid-pad"></view>
+  </scroll-view>
+
+  <!-- 工具条 -->
+  <view class="toolbar">
+    <view class="tb-row1">
+      <text class="selinfo">已选 <text class="num">{{selCount}}</text> 个半小时</text>
+      <text wx:if="{{hasSel}}" class="clear" bindtap="onClearSel">清空选择</text>
+    </view>
+
+    <view class="tb-row2">
+      <view class="prefix">¥</view>
+      <!-- 注意：这里是全项目最后一个 <input>。填写页已经因为
+           「input 不显示输入内容」全换成 textarea 了（见 contact.wxml），
+           这个框在 iOS 真机上大概率是一样的毛病，还没换是因为
+           快捷价签要能把价格写进框里，离不开 value 绑定，
+           而「受控的 textarea」还没在真机上验过。 -->
+      <input class="priceInput num" type="number" maxlength="5" value="{{priceInput}}"
+             placeholder="价格 / 半小时" bindinput="onInputPrice" />
+      <view
+        class="chip"
+        wx:for="{{quick}}"
+        wx:key="*this"
+        data-v="{{item}}"
+        bindtap="onTapQuick">¥{{item}}</view>
+    </view>
+
+    <view class="tb-row3">
+      <button class="btn-ghost" disabled="{{!hasSel}}" bindtap="onResetRule">恢复规则价</button>
+      <button class="btn" disabled="{{!hasSel}}" bindtap="onApply">应用到选中</button>
+    </view>
+
+    <view class="tb-hint">改价只影响之后的新预约，已提交的订单保留原价</view>
+  </view>
+
+</view>

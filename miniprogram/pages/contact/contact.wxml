@@ -1,0 +1,75 @@
+<!-- 填写联系方式。
+     这是一个普通页面，不是贴底弹层 —— 输入框在正常文档流里，
+     键盘避让交给系统默认的 adjust-position。
+     换成独立页面是为了躲开「fixed 贴底弹层 + 原生输入控件」那个组合，
+     真机上输入框会在键盘弹起期间不重绘（打字看不见，收起键盘才出现）。 -->
+
+<view class="page">
+
+  <block wx:if="{{!showDone}}">
+
+    <!-- 选好的时段 -->
+    <view class="card">
+      <view class="card-hd">已选 {{count}} 小时</view>
+      <view class="srow" wx:for="{{items}}" wx:key="time">
+        <text>{{item.court}} {{item.time}}</text>
+        <text class="num">¥{{item.price}}</text>
+      </view>
+      <view class="srow stot">
+        <text>合计</text>
+        <text class="num">¥{{total}}</text>
+      </view>
+    </view>
+
+    <view class="form">
+      <!-- 三个框【一模一样】，都是 <textarea class="textarea">。
+           这里【不许改回 <input>】：同一台 iOS 真机上 <input> 打进去的字
+           压根不显示 —— 输入过程中看不见，收起键盘也追不回来，
+           而 bindinput 是好的（值能拿到，只是框自己不渲染）。
+           试过 always-embed 反而更糟，连「收键盘后显示」都没了。
+           同页面上的 <textarea> 全程正常，所以三个框统一用它。
+
+           也不要加任何按键盘触发的东西（value 绑定、实时字数、实时报错）：
+           手机号的合法性等点「确认提交」时再判，不合格就提示、让客人接着改。
+           代价：手机号没有数字键盘了，提交时会 replace(/\D/g,'') 兜住。 -->
+      <view class="field">
+        <view class="label">手机号<text class="req">*</text></view>
+        <textarea class="textarea" maxlength="20"
+                  placeholder="请输入 11 位手机号"
+                  bindinput="onInputPhone"></textarea>
+        <view wx:if="{{phoneErr}}" class="err">请输入正确的 11 位手机号</view>
+        <view wx:else class="tip">我们会打这个号码跟您确认</view>
+      </view>
+
+      <view class="field">
+        <view class="label">称呼（选填）</view>
+        <textarea class="textarea" maxlength="20"
+                  placeholder="怎么称呼您"
+                  bindinput="onInputName"></textarea>
+      </view>
+
+      <view class="field">
+        <view class="label">备注需求（选填）</view>
+        <textarea class="textarea" maxlength="100"
+                  placeholder="例如：需要球网、租两支球拍、带小朋友"
+                  bindinput="onInputNote"></textarea>
+        <view class="tip">有特殊需求可以写在这里，方便我们提前准备</view>
+      </view>
+    </view>
+
+    <view class="acts">
+      <button class="btn" bindtap="onConfirm">确认提交</button>
+      <view class="sub-tip">提交后场地将为您保留，我们会尽快致电确认</view>
+    </view>
+
+  </block>
+
+  <!-- 成功页 -->
+  <view wx:else class="done">
+    <view class="ring"><view class="check"></view></view>
+    <view class="done-title">已提交，等待确认</view>
+    <view class="done-text">{{doneText}}</view>
+    <button class="btn-again" bindtap="onAgain">再约一场</button>
+  </view>
+
+</view>
