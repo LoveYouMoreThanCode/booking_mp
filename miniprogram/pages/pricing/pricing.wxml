@@ -49,11 +49,9 @@
     <!-- 点时间 = 选中整行 -->
     <view class="grid-row" wx:for="{{gridRows}}" wx:for-index="ri" wx:key="label">
       <view class="td time num" data-min="{{item.min}}" bindtap="onTapRowLabel">{{item.label}}</view>
-      <block wx:for="{{item.courts}}" wx:for-index="ci" wx:for-item="court" wx:key="ci">
+      <block wx:for="{{item.courts}}" wx:for-index="ci" wx:for-item="c" wx:key="ci">
         <view class="td hour">
-          <block wx:for="{{court.halves}}" wx:for-index="hi" wx:for-item="h" wx:key="key">
-            <view class="{{h.cls}}" data-key="{{h.key}}" bindtap="onTapHalf">{{h.text}}</view>
-          </block>
+          <view class="{{c.cls}}" data-key="{{c.key}}" bindtap="onTapCell">{{c.text}}</view>
         </view>
       </block>
     </view>
@@ -63,7 +61,7 @@
   <!-- 工具条 -->
   <view class="toolbar">
     <view class="tb-row1">
-      <text class="selinfo">已选 <text class="num">{{selCount}}</text> 个半小时</text>
+      <text class="selinfo">已选 <text class="num">{{selCount}}</text> 个小时</text>
       <text wx:if="{{hasSel}}" class="clear" bindtap="onClearSel">清空选择</text>
     </view>
 
@@ -75,7 +73,7 @@
            快捷价签要能把价格写进框里，离不开 value 绑定，
            而「受控的 textarea」还没在真机上验过。 -->
       <input class="priceInput num" type="number" maxlength="5" value="{{priceInput}}"
-             placeholder="价格 / 半小时" bindinput="onInputPrice" />
+             placeholder="价格 / 小时" bindinput="onInputPrice" />
       <view
         class="chip"
         wx:for="{{quick}}"

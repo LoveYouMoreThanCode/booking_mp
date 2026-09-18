@@ -133,7 +133,7 @@ Page({
     return '';
   },
 
-  /** 一格 = 一小时。显示的是这一小时的总价（两个半小时价的和）。 */
+  /** 一格 = 一小时。显示的就是这一小时的价格。 */
   cellText(st, day, ci, from, to) {
     if (st === 'past') return '—';
     if (st === 'confirmed') return '满';

@@ -93,30 +93,40 @@ Page({
       return;
     }
 
-    const res = core.createBooking({
+    /* 落单是【异步】的（本地后端当场返回，云端要等网络）。
+       所以「提交成功之后的事」全写在 done 里 —— 写在下一行的话，
+       本地能跑，云端会在订单还没落地时就跳到成功页。 */
+    core.createBooking({
       dayIdx: p.dayIdx,
       groups: core.groupSlots(core.parseKeys(p.keys), CONFIG.bookMin),
       phone,
       name: name.trim(),
       note: note.trim(),
-    });
+    })
+      .done(res => {
+        if (!res.ok) {
+          wx.showToast({ title: '抱歉，你选的时段已不可预约', icon: 'none', duration: 2600 });
+          return;
+        }
+        if (res.skipped.length) {
+          wx.showToast({ title: '部分时段已不可预约，已为你剔除', icon: 'none', duration: 2600 });
+        }
 
-    if (!res.ok) {
-      wx.showToast({ title: '抱歉，你选的时段已不可预约', icon: 'none', duration: 2600 });
-      return;
-    }
-    if (res.skipped.length) {
-      wx.showToast({ title: '部分时段已不可预约，已为你剔除', icon: 'none', duration: 2600 });
-    }
+        // 交掉了就清掉，免得返回再进来重复提交
+        getApp().globalData.pending = null;
 
-    // 交掉了就清掉，免得返回再进来重复提交
-    getApp().globalData.pending = null;
-
-    const masked = `${phone.slice(0, 3)}****${phone.slice(-4)}`;
-    this.setData({
-      showDone: true,
-      doneText: `预约已提交，我们会尽快致电 ${masked} 与您确认`,
-    });
+        const masked = `${phone.slice(0, 3)}****${phone.slice(-4)}`;
+        this.setData({
+          showDone: true,
+          doneText: `预约已提交，我们会尽快致电 ${masked} 与您确认`,
+        });
+      })
+      .fail(() => {
+        /* 订单没能落库（网络断了、云函数出错）。内存里那条已经回滚，
+           所以【绝不能】给客人看成功页 —— 他以为约上了，老板那头没有。
+           pending 也留着不消费，客人再点一次「确认提交」就是重试。 */
+        wx.showToast({ title: '提交失败，请检查网络后重试', icon: 'none', duration: 2600 });
+      });
   },
 
   /* 再约一场：回预约页。那边 onShow 会把已约不上的选择挑掉，

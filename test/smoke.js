@@ -10,14 +10,36 @@ if (IS_NODE) {
   var readFile = function (p) { return fs.readFileSync(p, 'utf8'); };
   var print = function (s) { process.stdout.write(s + '\n'); };
 }
-var console = { log: function () { print(Array.prototype.slice.call(arguments).join(' ')); } };
+var console = {
+  log: function () { print(Array.prototype.slice.call(arguments).join(' ')); },
+  // core.refresh 的失败路径会调 warn（真机上用来提示「网络不好」）。
+  // 桩件里没有它的话，那条路径一被走到就炸「not a function」。
+  warn: function () {},
+};
 
 /* ── 可控时钟 ────────────────────────────────────────
    core.js 用 new Date() 判断「是否已过」。要测「晚上才打开」
    「跨天」这类场景，就得能把表拨到指定时刻。
    ──────────────────────────────────────────────────── */
 var RealDate = Date;
-var clockOffset = 0;
+
+/* 测试里的「今天」固定在一个已知的【工作日】。
+   ⚠️ 原来这里没有基准日期，setClock 拨的是「真实的今天」——于是
+      DATES[1]（明天）是星期几，完全取决于你哪天跑测试：
+      周五跑，明天是周六；周六跑，明天是周日 —— 周末价 ¥50，
+      而断言里写的是工作日价（¥45 / ¥30），一次红 20 条。
+      这套测试因此是「周一到周四能过」的，之前大概率都是工作日跑的。
+
+   只固定【日期】，时分照旧跟着真实时刻走 —— 这样修的是那一类问题，
+   又不动任何「几点跑」的现有行为。DATES[5]/[6] 从此稳定是六/日，
+   周末价那一段规则也才有了可测的入口。 */
+var BASE_DATE = new RealDate(2026, 8, 14);   // 2026-09-14，周一
+var clockOffset = (function () {
+  var now = new RealDate(), base = new RealDate(BASE_DATE.getTime());
+  base.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), 0);
+  return base.getTime() - now.getTime();
+})();
+
 function FakeDate() {
   if (arguments.length === 0) return new RealDate(RealDate.now() + clockOffset);
   var args = [null].concat(Array.prototype.slice.call(arguments));
@@ -29,9 +51,9 @@ FakeDate.UTC = RealDate.UTC;
 FakeDate.prototype = RealDate.prototype;
 Date = FakeDate;
 
-/** 把表拨到「今天 h:m」 */
+/** 把表拨到基准日（BASE_DATE）那天的 h:m */
 function setClock(h, m) {
-  var t = new RealDate();
+  var t = new RealDate(BASE_DATE.getTime());
   t.setHours(h, m, 0, 0);
   clockOffset = t.getTime() - RealDate.now();
   return t;
@@ -65,9 +87,34 @@ function eq(a, b, msg) { ok(a === b, msg + '  (got ' + JSON.stringify(a) + ', wa
 var store = {};
 var log = [];
 var modalAnswer = true;          // 下一次 showModal 的默认答复
+
+/* 真机的存储是【序列化落盘】的：setStorageSync 写进去的是一份拷贝，
+   getStorageSync 每次返回的也是【反序列化出来的新对象】，绝不是
+   你手里那个引用的同一个对象。
+
+   桩件照这个来，是为了断掉一条【只存在于测试里】的耦合：
+   core 的 BOOKINGS 和存储里那份，现在必定是两个数组。
+
+   为什么在意：落库走的是 store.insert，它是「读一遍存储 → 改 → 写回」，
+   而乐观写入已经先把订单 push 进 BOOKINGS 了。要是 BOOKINGS 恰好
+   【就是】存储里那个数组，这一条订单会被 push 两次，造出一条重复订单。
+   真机上不可能发生（读写都过一遍序列化）。
+
+   ⚠️ 说清楚：现在就改成浅拷贝，这套断言【仍然是全绿的】—— 我试过，
+      没能造出一条变红的用例。所以这不是在修一个已发生的 bug，
+      而是把一个「凑巧不出事」的状态换成「不可能出事」：浅拷贝下
+      是否重复 push，取决于哪个数组引用被交给了 setStorageSync，
+      那是个没人会想到要去维护的实现细节。
+
+   ⚠️ 改这里之前先想清楚：本文件里没有任何一处可以依赖
+      「读出来的就是写进去的那个对象」。 */
+function clone(v) {
+  return v === undefined ? undefined : JSON.parse(JSON.stringify(v));
+}
+
 var wx = {
-  getStorageSync: function (k) { return store[k]; },
-  setStorageSync: function (k, v) { store[k] = v; },
+  getStorageSync: function (k) { return clone(store[k]); },
+  setStorageSync: function (k, v) { store[k] = clone(v); },
   removeStorageSync: function (k) { delete store[k]; },
   showToast: function (o) { log.push('toast: ' + (o.title || '')); },
   showModal: function (o) {
@@ -95,24 +142,51 @@ function Page(def) { pageDefs.push(def); }
 function App(def) { Object.keys(def).forEach(function (k) { APP[k] = def[k]; }); }
 function getApp() { return APP; }
 
-var coreMod = null;
-function req(p) {
-  if (/core\.js$/.test(p)) return coreMod.exports;
-  throw new Error('未预期的 require: ' + p);
+/* ── 极小的模块系统 ──────────────────────────────────
+   语义和真机一致：同一个模块只求值一次，之后返回缓存。
+   为什么需要它：core.js 现在 require 了 utils/store.js（不再是单个文件），
+   而测试还要能「重开 App」—— 把某个模块从缓存里删掉再求值一次。
+
+   ⚠️ 页面文件【不进缓存】：booking.js 被 loadPage 4 次、contact.js 5 次，
+      每次都必须重新求值才会重新触发 Page()。缓存页面模块会让第二次
+      loadPage 拿不到 pageDefs 直接抛错。 */
+var MODULES = {};                       // 键 = 相对 miniprogram/ 的路径
+
+function resolvePath(fromRel, p) {
+  var stack = fromRel.split('/');
+  stack.pop();
+  p.split('/').forEach(function (seg) {
+    if (seg === '.' || seg === '') return;
+    if (seg === '..') stack.pop(); else stack.push(seg);
+  });
+  var out = stack.join('/');
+  return /\.js$/.test(out) ? out : out + '.js';
 }
 
 function loadModule(rel) {
+  if (MODULES[rel]) return MODULES[rel];
   var mod = { exports: {} };
+  MODULES[rel] = mod;                   // 先登记再求值：万一将来 require 成环也不会死循环
+  var req = function (p) {
+    if (p.charAt(0) !== '.') throw new Error('未预期的 require: ' + p);
+    // 和 Node 一样：require 拿到的是 module.exports，不是模块对象本身
+    return loadModule(resolvePath(rel, p)).exports;
+  };
   var fn = new Function('module', 'exports', 'require', 'wx', 'Page', 'App', 'getApp', readFile(ROOT + rel));
   fn(mod, mod.exports, req, wx, Page, App, getApp);
   return mod;
 }
 
+/** 模拟「杀掉小程序再打开」：把模块从缓存里删掉，重新求值一次 */
+function reload(rel) {
+  delete MODULES[rel];
+  return loadModule(rel).exports;
+}
+
 function loadPage(rel) {
   pageDefs = [];
-  var mod = { exports: {} };
-  var fn = new Function('module', 'exports', 'require', 'wx', 'Page', 'App', 'getApp', readFile(ROOT + rel));
-  fn(mod, mod.exports, req, wx, Page, App, getApp);
+  delete MODULES[rel];                  // 页面必须每次重新求值（见上面说明）
+  loadModule(rel);
   if (!pageDefs.length) throw new Error(rel + ' 没有调用 Page()');
   return makePage(pageDefs[0]);
 }
@@ -134,16 +208,36 @@ function ev(dataset) { return { currentTarget: { dataset: dataset || {} } }; }
 var T19 = { ri: 11, ci: 0, key: '0|1140' };
 var T20 = { ri: 12, ci: 0, key: '0|1200' };
 
+/* 测试默认拿「明天」当参照。基准日固定是周一，所以明天稳定是工作日
+   （见顶部 BASE_DATE 的说明）—— 价格断言都按工作日价写。 */
+var DAY = 1;
+
+/* ── 同步取值助手 ────────────────────────────────────
+   写操作（createBooking / setBookingStatus / 改价 / 清空）现在返回 task，
+   因为接云之后结果要等网络。
+
+   本地后端是【同步】回调的，所以 .done 注册的那一刻就能拿到结果 ——
+   整套测试因此仍然是全程同步、失败仍然是 exit 3。
+   拿不到（undefined）说明本地后端被改成异步了，那会让下面几百条断言
+   悄悄变成假绿：所以取到的值一旦是 undefined，用它就会抛，红在 exit 3。
+
+   ⚠️ 只给【测试】用。页面代码绝不能这么写 —— 页面必须把后续动作
+      放进 .done 里，否则本地能跑、云端必崩。 */
+function sync(task) {
+  var out;
+  task.done(function (v) { out = v; });
+  return out;
+}
+
 /* ══════════════════════════════════════════════════ */
 console.log('\n── 载入 core ────────────────────────────────');
-coreMod = loadModule('utils/core.js');
-var core = coreMod.exports;
+var core = loadModule('utils/core.js').exports;
 var CONFIG = core.CONFIG;
 
 eq(CONFIG.courts.length, 4, '4 片场地');
-eq(CONFIG.slotMin, 30, '计价粒度 30 分钟（价格可以每半小时不同）');
+eq(CONFIG.slotMin, 60, '计价粒度 60 分钟（后台改价页和客人页一样，一格一小时）');
 eq(CONFIG.bookMin, 60, '预定粒度 60 分钟（客人最少订一小时）');
-eq(core.SLOTS.length, 28, '每天 28 个计价档 (8:00–22:00)');
+eq(core.SLOTS.length, 14, '每天 14 个计价档 (8:00–22:00 每小时一档)');
 eq(core.HOURS.length, 14, '14 个小时行');
 eq(core.BOOKS.length, 14, '14 个可订段 (8:00–22:00 每小时一段)');
 eq(core.DATES.length, 7, '未来 7 天');
@@ -158,8 +252,31 @@ core.clearAllData();
 eq(core.BOOKINGS.length, 0, '清空后为 0 条');
 
 /* ══════════════════════════════════════════════════ */
+console.log('\n── store 的同步回调契约 ─────────────────────');
+/* 本地后端在 .done() 注册的那一刻【同步】回调 —— 这是整套测试能全程
+   同步跑下去的前提，也是页面必须把「拿到数据之后要做的事」写进 done 的
+   原因（云端后端是异步回调，写到 done 外面就会「提示已提交、实际没提交」）。
+
+   如果将来有人把本地后端改成 setTimeout 式（比如想「模拟网络延迟」），
+   这条会立刻红在 exit 3 —— 而不是让下面几百条断言悄悄变成假绿。
+   整个设计就靠这一条守着。 */
+var syncCalled = false;
+core.refresh(function () { syncCalled = true; });
+ok(syncCalled, '本地后端在 done 注册时就同步回调（测试才能全程同步）');
+
+// refresh 之后内存缓存要和存储对齐
+core.clearAllData();
+var bSync = sync(core.createBooking({
+  dayIdx: DAY, groups: [{ ci: 0, court: '1号场', from: 1200, to: 1260 }],
+  phone: '13800138000', name: '同步测试', note: '',
+}));
+eq(bSync.ok, true, 'createBooking 正常落单');
+eq(core.BOOKINGS.length, 1, '订单进了内存工作集');
+eq(core.spanStatus(DAY, 0, 1200, 1260), 'pending', '占用状态立刻生效');
+core.clearAllData();
+
+/* ══════════════════════════════════════════════════ */
 console.log('\n── 客人页 booking ───────────────────────────');
-var DAY = 1;
 var bk = loadPage('pages/booking/booking.js');
 bk.onLoad();
 eq(bk.data.gridRows.length, 14, '网格 14 行');
@@ -171,7 +288,7 @@ bk.onTapDate(ev({ idx: DAY }));
 eq(bk.data.currentDay, DAY, '切到明天');
 
 eq(core.spanStatus(DAY, 0, 1140, 1200), 'free', '19:00–20:00 空闲');
-eq(bk.data.gridRows[11].courts[0].text, '90', '19:00–20:00 显示 ¥90（45+45）');
+eq(bk.data.gridRows[11].courts[0].text, '90', '19:00–20:00 显示 ¥90（工作日晚上 90/小时）');
 
 bk.onTapCell(ev(T19));
 eq(bk.sel.size, 1, '选中 1 段');
@@ -191,15 +308,18 @@ eq(bk.data.footHours, 2, '底部小时数 2');
 bk.onTapCell(ev(T19));
 eq(bk.sel.size, 1, '再点一次取消选中');
 
-/* 半小时粒度还在：管理员把 18:30 单独改成 ¥99，
-   18:00–19:00 这一段就应该是 45 + 99 = ¥144 */
-core.setOverride(DAY, 1, 1110, 99);
+/* 段价是「段内每一档逐个相加」，不是「某一档的价 × 档数」。
+   把 19:00 单独改成 ¥99，再订 18:00–20:00 两个小时：
+   应该是 90 + 99 = ¥189，而不是 99 × 2 = ¥198（也不能是 90 × 2）。 */
+core.setOverride(DAY, 1, 1140, 99);
 bk.sel.clear();
 bk.buildGrid();                                       // 价格改了，格子得重画
 bk.onTapCell(ev({ ri: 10, ci: 1, key: '1|1080' }));   // 18:00–19:00
-eq(bk.data.gridRows[10].courts[1].text, '144', '段价是两个半小时价的和，不是单价×2');
-eq(bk.data.footTotal, 144, '合计 ¥144（45 + 99）');
-core.clearOverride(DAY, 1, 1110);
+bk.onTapCell(ev({ ri: 11, ci: 1, key: '1|1140' }));   // 19:00–20:00
+eq(bk.data.gridRows[10].courts[1].text, '90', '18:00 那一格还是规则价 ¥90');
+eq(bk.data.gridRows[11].courts[1].text, '99', '19:00 那一格是手改价 ¥99');
+eq(bk.data.footTotal, 189, '段价逐档相加（90 + 99），不是单价×档数');
+core.clearOverride(DAY, 1, 1140);
 
 /* 提交：预约页只负责把选择交给填写页。
    填写页是独立页面而不是贴底弹层 —— 输入框在真机上「打字时看不见、
@@ -244,7 +364,7 @@ ct.onConfirm();
 eq(core.BOOKINGS.length, 1, '下单成功');
 eq(core.BOOKINGS[0].phone, '13800138000', '订单里存的是纯数字手机号');
 eq(core.BOOKINGS[0].total, 90, '订单金额 ¥90');
-eq(core.BOOKINGS[0].slotKeys.length, 2, '占 2 个计价档（一小时的上下半）');
+eq(core.BOOKINGS[0].slotKeys.length, 1, '占 1 个计价档（一小时就是一档）');
 eq(core.BOOKINGS[0].status, 'pending', '初始状态待确认');
 eq(ct.data.showDone, true, '成功页显示');
 ok(ct.data.doneText.indexOf('138****8000') >= 0, '成功页手机号打码：' + ct.data.doneText);
@@ -351,10 +471,10 @@ eq(core.findBooking(bid).status, 'pending', '恢复为待确认');
 
 // 恢复时撞车应被拦下：先释放 19:00，让第二单占住，再试着恢复第一单
 core.cancelBooking(bid);
-var b2 = core.createBooking({
+var b2 = sync(core.createBooking({
   dayIdx: DAY, groups: [{ ci: 0, court: '1号场', from: 1140, to: 1200 }],
   phone: '13900139000', name: '后来的人', note: '',
-});
+}));
 eq(b2.ok, true, '第二单创建成功');
 od.onShow();
 od.onRestore(ev({ id: bid }));
@@ -367,25 +487,28 @@ pr.onLoad();
 pr.onTapDate(ev({ idx: DAY }));   // 改价页默认停在第 0 天，先切到明天
 eq(pr.data.currentDay, DAY, '改价页切到明天');
 eq(pr.data.gridRows.length, 14, '改价页仍是 14 小时行');
-eq(pr.data.gridRows[0].courts[0].halves.length, 2, '改价页保留半小时格（管理员按半小时改价）');
+/* 「一格一小时」是这次改动的重点：改价页和客人页粒度一致，
+   老板填 90 这一小时就是 90，客人看到的也是 90。 */
+eq(pr.data.gridRows[0].courts[0].key, '0|480', '一格就是一小时（08:00 那格）');
+eq(pr.data.gridRows[0].courts[0].text, '60', '08:00 规则价 ¥60（工作日白天）');
 eq(pr.data.hasSel, false, '初始无选中');
 eq(pr.data.overrideCount, 0, '初始无手改');
 
-// 明天 1 号场 20:00 规则价 = 45
-eq(core.priceFor(DAY, 0, 1200), 45, '改价前 20:00 规则价 ¥45');
+// 明天 1 号场 20:00 规则价 = 90（工作日晚上）
+eq(core.priceFor(DAY, 0, 1200), 90, '改价前 20:00 规则价 ¥90');
 
 // 点整列：场地表头
 pr.onTapCourtHead(ev({ ci: 0 }));
-eq(pr.sel.size, 28, '点场地名选中整列 28 档');
-eq(pr.data.selCount, 28, '工具条显示已选 28');
-eq(pr.data.gridRows[0].courts[0].halves[0].cls, 'half selected', '整列变选中');
+eq(pr.sel.size, 14, '点场地名选中整列 14 档');
+eq(pr.data.selCount, 14, '工具条显示已选 14');
+eq(pr.data.gridRows[0].courts[0].cls, 'cell selected', '整列变选中');
 
 pr.onClearSel();
 eq(pr.sel.size, 0, '清空选择');
 
-// 点整行：时间列（20:00 → 2 格 × 4 场地 = 8）
+// 点整行：时间列（20:00 → 1 格 × 4 场地 = 4）
 pr.onTapRowLabel(ev({ min: 1200 }));
-eq(pr.sel.size, 8, '点时间选中整行 8 档');
+eq(pr.sel.size, 4, '点时间选中整行 4 格');
 pr.onClearSel();
 
 // 点整行再点一次 = 全取消
@@ -394,7 +517,7 @@ pr.onTapRowLabel(ev({ min: 1200 }));
 eq(pr.sel.size, 0, '整行再点一次全取消');
 
 // 单格选中 + 应用价格
-pr.onTapHalf(ev({ key: '0|1200' }));
+pr.onTapCell(ev({ key: '0|1200' }));
 eq(pr.sel.size, 1, '选中 1 格');
 
 pr.onApply();
@@ -405,10 +528,10 @@ eq(pr.data.priceInput, '88', '价格输入过滤非数字');
 
 pr.onApply();
 eq(core.hasOverride(DAY, 0, 1200), true, '价格已覆盖');
-eq(core.priceFor(DAY, 0, 1200), 88, '价格变成 ¥88');
+eq(core.priceFor(DAY, 0, 1200), 88, '这一小时变成 ¥88');
 eq(pr.sel.size, 0, '应用后自动清空选择');
-eq(pr.data.gridRows[12].courts[0].halves[0].cls, 'half override', '格子标记为已手改');
-eq(pr.data.gridRows[12].courts[0].halves[0].text, '88', '格子显示新价');
+eq(pr.data.gridRows[12].courts[0].cls, 'cell override', '格子标记为已手改');
+eq(pr.data.gridRows[12].courts[0].text, '88', '格子显示新价');
 eq(pr.data.overrideCount, 1, '本日已手改 1 格');
 eq(pr.data.priceInput, '', '应用后清空输入框');
 
@@ -417,26 +540,26 @@ pr.onTapQuick({ currentTarget: { dataset: { v: 50 } } });
 eq(pr.data.priceInput, '50', '快捷价签填入 50');
 
 // 恢复规则价
-pr.onTapHalf(ev({ key: '0|1200' }));
+pr.onTapCell(ev({ key: '0|1200' }));
 pr.onResetRule();
 eq(core.hasOverride(DAY, 0, 1200), false, '已恢复规则价');
-eq(core.priceFor(DAY, 0, 1200), 45, '价格回到 ¥45');
-eq(pr.data.gridRows[12].courts[0].halves[0].text, '45', '格子显示回规则价');
+eq(core.priceFor(DAY, 0, 1200), 90, '价格回到 ¥90');
+eq(pr.data.gridRows[12].courts[0].text, '90', '格子显示回规则价');
 
 /* ══════════════════════════════════════════════════ */
 console.log('\n── 端到端：老板改价 → 客人看到 ───────────────');
-pr.onTapHalf(ev({ key: '2|1080' }));      // 明天 3 号场 18:00
+pr.onTapCell(ev({ key: '2|1080' }));      // 明天 3 号场 18:00 这一小时
 pr.onInputPrice({ detail: { value: '99' } });
 pr.onApply();
 eq(core.priceFor(DAY, 2, 1080), 99, '老板把 3 号场 18:00 改成 ¥99');
-eq(core.priceFor(DAY, 2, 1110), 45, '18:30 还是规则价 ¥45');
+eq(core.priceFor(DAY, 2, 1140), 90, '19:00 还是规则价 ¥90');
 
 var bk2 = loadPage('pages/booking/booking.js');
 bk2.onLoad();
 bk2.onTapDate(ev({ idx: DAY }));
-eq(bk2.data.gridRows[10].courts[2].text, '144', '客人页显示 18:00–19:00 合计 ¥144（99+45）');
+eq(bk2.data.gridRows[10].courts[2].text, '99', '客人页这一格就是 ¥99（一小时，不再拼两个半小时）');
 bk2.onTapCell(ev({ ri: 10, ci: 2, key: '2|1080' }));
-eq(bk2.data.footTotal, 144, '客人下单计价 ¥144');
+eq(bk2.data.footTotal, 99, '客人下单计价 ¥99');
 
 bk2.onSubmit();
 var ct5 = loadPage('pages/contact/contact.js');
@@ -444,51 +567,53 @@ ct5.onLoad();
 ct5.onInputPhone({ detail: { value: '13712345678' } });
 ct5.onConfirm();
 var last = core.BOOKINGS[core.BOOKINGS.length - 1];
-eq(last.total, 144, '订单快照价 ¥144');
+eq(last.total, 99, '订单快照价 ¥99');
 
 // 老板事后改价，不应影响已提交订单
 core.setOverride(DAY, 2, 1080, 200);
 eq(core.priceFor(DAY, 2, 1080), 200, '老板改成 ¥200');
-eq(core.priceFor(DAY, 2, 1110), 45, '18:30 仍是 ¥45');
-eq(last.total, 144, '已提交订单仍是 ¥144（价格快照）');
+eq(core.priceFor(DAY, 2, 1140), 90, '19:00 仍是 ¥90');
+eq(last.total, 99, '已提交订单仍是 ¥99（价格快照）');
 
 /* ══════════════════════════════════════════════════ */
 console.log('\n── 边界 ─────────────────────────────────────');
 core.clearAllData();
-var r = core.createBooking({
+var r = sync(core.createBooking({
   dayIdx: 1, groups: [{ ci: 0, court: '1号场', from: 480, to: 540 }],
   phone: '13000000000', name: '', note: '',
-});
+}));
 eq(r.ok, true, '正常下单');
 eq(r.skipped.length, 0, '无冲突');
 
-var r2 = core.createBooking({
+/* 部分冲突：订 08:00–10:00，其中 08:00 那一小时已被 r 占了。
+   一小时粒度下一段就是整数个小时，所以这里是「2 档里剔掉 1 档」。 */
+var r2 = sync(core.createBooking({
   dayIdx: 1,
-  groups: [{ ci: 0, court: '1号场', from: 510, to: 570 }],   // 510 已占，540 空闲
+  groups: [{ ci: 0, court: '1号场', from: 480, to: 600 }],   // 480 已占，540 空闲
   phone: '13000000001', name: '', note: '',
-});
+}));
 eq(r2.ok, true, '部分冲突仍可下单');
 eq(r2.skipped.length, 1, '剔除 1 个已占档');
 eq(r2.booking.slotKeys.length, 1, '只占 1 档');
 
-var r3 = core.createBooking({
+var r3 = sync(core.createBooking({
   dayIdx: 1, groups: [{ ci: 0, court: '1号场', from: 480, to: 540 }],
   phone: '13000000002', name: '', note: '',
-});
+}));
 eq(r3.ok, false, '全冲突时下单失败');
-eq(r3.skipped.length, 2, '全部被剔除');
+eq(r3.skipped.length, 1, '这一小时被剔除');
 
 core.cancelBooking(r.booking.id);
 eq(core.slotStatus(1, 0, 480), 'free', '取消后时段重新开放');
 
-// 跨场地分组
+// 跨场地分组：同场地相邻小时并成一段，不同场地各算各的
 var g = core.groupSlots([
-  { ci: 0, min: 600 }, { ci: 1, min: 600 }, { ci: 0, min: 630 },
+  { ci: 0, min: 600 }, { ci: 1, min: 600 }, { ci: 0, min: 660 },
 ]);
 eq(g.length, 2, '跨场地拆成 2 段');
 eq(g[0].court, '1号场', '第一段 1 号场');
 eq(g[0].from, 600, '第一段 10:00 起');
-eq(g[0].to, 660, '第一段到 11:00');
+eq(g[0].to, 720, '第一段 10:00–12:00（同场地两小时并成一段）');
 eq(g[1].court, '2号场', '第二段 2 号场');
 
 // 一小时粒度下的合并：600 和 660 应该并成 10:00–12:00
@@ -528,20 +653,20 @@ eq(nb.sel.size, 1, '还没结束的段点得动');
    客人愿意花钱买一段已经开始的时段，我们允许。 */
 eq(core.spanStatus(0, 0, 1200, 1260), 'free', '已开始但未结束的段仍可订');
 
-var px = core.createBooking({
+var px = sync(core.createBooking({
   dayIdx: 0, groups: [{ ci: 1, court: '2号场', from: 1200, to: 1260 }],
   phone: '13111111112', name: '', note: '',
-});
+}));
 eq(px.ok, true, '已经开始的段能落单（客人牺牲一点时间）');
-eq(px.booking.slotKeys.length, 2, '整段两个计价档都占上');
+eq(px.booking.slotKeys.length, 1, '这一小时整段占上（一小时粒度就一格）');
 
 // 整段已经结束的，落单这层也要自己扛住，不能只靠界面拦
-var py = core.createBooking({
+var py = sync(core.createBooking({
   dayIdx: 0, groups: [{ ci: 2, court: '3号场', from: 1140, to: 1200 }],
   phone: '13111111111', name: '', note: '',
-});
+}));
 eq(py.ok, false, '已结束的段直接在落单层被拒');
-eq(py.skipped.length, 2, '两个计价档都被剔除');
+eq(py.skipped.length, 1, '这一小时被剔除');
 
 // 深夜打开：今天全过完了，应该自动跳到明天
 setClock(22, 30);
@@ -551,7 +676,7 @@ lb.onLoad();
 lb.onShow();
 eq(lb.data.currentDay, 1, '今天已过完，自动跳到明天');
 eq(lb.data.dayHint, '', '明天没有过期问题，不弹提示');
-eq(lb.data.gridRows[0].courts[0].text, '60', '明天 8:00–9:00 正常显示 ¥60（30+30）');
+eq(lb.data.gridRows[0].courts[0].text, '60', '明天 8:00–9:00 正常显示 ¥60（一小时一格）');
 
 // 提示文案的分支
 eq(lb.buildHint(1, 0), '这天已无可约时段，换个日期看看', '未来某天全满的提示');
@@ -559,6 +684,168 @@ eq(lb.buildHint(1, 5), '', '未来某天有空时不弹提示');
 eq(lb.buildHint(0, 0), '今天已无可约时段，点上面的日期换一天', '今天全满的提示');
 
 setClock(12, 0);   // 拨回白天，别影响后面的输出
+
+/* ══════════════════════════════════════════════════ */
+console.log('\n── 手改价要扛得住重启 ───────────────────────');
+/* 原来 PRICE_OVERRIDES 只是个内存对象，从来没进过存储：
+   老板在改价页改完价、关掉小程序再打开，价格全回到规则价。
+
+   「重启」= 把 core.js 重新求值一遍（模块级变量全部重建、重新读一次存储），
+   而存储本身不动 —— wx 桩里的 store 对象在两次载入之间是同一份。
+   reload() 会先把它从模块缓存里删掉，所以拿到的是全新实例。
+
+   注意 store.js 本身【不需要】跟着重载：它不持有任何内存数据，
+   每次调用都重新读存储 —— 这正是「store 不存状态」这条规矩的用处。 */
+core.clearAllData();
+
+var prR = loadPage('pages/pricing/pricing.js');
+prR.onLoad();
+prR.onTapDate(ev({ idx: DAY }));
+prR.onTapCell(ev({ key: '0|1200' }));
+prR.onInputPrice({ detail: { value: '88' } });
+prR.onApply();
+eq(core.priceFor(DAY, 0, 1200), 88, '改价后当场生效');
+
+core = reload('utils/core.js');              // ← 重开 App
+eq(core.priceFor(DAY, 0, 1200), 88, '重启后手改价还在（不再回到 ¥90）');
+ok(core.hasOverride(DAY, 0, 1200), '重启后仍然是「已手改」状态');
+
+var prR2 = loadPage('pages/pricing/pricing.js');   // 页面要跟着重载，否则握的还是旧 core
+prR2.onLoad();
+prR2.onTapDate(ev({ idx: DAY }));
+eq(prR2.data.gridRows[12].courts[0].text, '88', '重启后改价页显示的是手改价');
+eq(prR2.data.overrideCount, 1, '重启后手改计数 1');
+
+// 「清空数据」要把持久化的手改价一起清掉，否则清完价格还是旧的
+core.clearAllData();
+core = reload('utils/core.js');
+eq(core.priceFor(DAY, 0, 1200), 90, '「清空数据」后手改价也被清掉，回到 ¥90');
+
+/* 批量写的两条路径也过一遍（改价页「应用到选中」一次可能 14 格） */
+var prR3 = loadPage('pages/pricing/pricing.js');
+prR3.onLoad();
+prR3.onTapDate(ev({ idx: DAY }));
+prR3.onTapCell(ev({ key: '0|1200' }));
+prR3.onTapCell(ev({ key: '0|1260' }));
+prR3.onInputPrice({ detail: { value: '77' } });
+prR3.onApply();
+eq(core.hasOverride(DAY, 0, 1200) && core.hasOverride(DAY, 0, 1260), true,
+  '批量改价：一次写多个格子都生效');
+prR3.onTapCell(ev({ key: '0|1200' }));
+prR3.onTapCell(ev({ key: '0|1260' }));
+prR3.onResetRule();
+eq(core.hasOverride(DAY, 0, 1200) || core.hasOverride(DAY, 0, 1260), false,
+  '批量恢复规则价：多个格子一起清掉');
+
+core.clearAllData();
+
+/* ══════════════════════════════════════════════════ */
+console.log('\n── 落库失败要回滚（接云之后这就是日常）─────');
+/* 本地后端写 storage 几乎不会失败，所以这里把 wx.setStorageSync 临时换成
+   抛异常，模拟「网断了 / 云函数报错 / 数据库写不进去」。
+
+   要验的不是「内存回滚了」本身，而是【界面上不能出现假象】：
+     客人不能看到「已提交」而其实什么都没落库，
+     老板不能看到卡片变成「已确认」而云端根本没改。
+   所以每条都同时盯两件事：内存回滚 + 页面确实收到了 .fail 并报了错。 */
+function breakWrites() {
+  var real = wx.setStorageSync;
+  wx.setStorageSync = function () { throw new Error('模拟落库失败'); };
+  return function () { wx.setStorageSync = real; };
+}
+
+setClock(12, 0);
+core.refreshDates();
+core.clearAllData();
+
+/* ① 客人下单落库失败 */
+var fix1 = breakWrites();
+var bkF = loadPage('pages/booking/booking.js');
+bkF.onLoad();
+bkF.onTapDate(ev({ idx: DAY }));
+bkF.sel.clear();
+bkF.onTapCell(ev(T19));
+bkF.onSubmit();
+
+var ctF = loadPage('pages/contact/contact.js');
+ctF.onLoad();
+ctF.onInputPhone({ detail: { value: '13800138000' } });
+log.length = 0;
+ctF.onConfirm();
+
+eq(core.BOOKINGS.length, 0, '落库失败：内存里不留那条假订单（已回滚）');
+eq(core.spanStatus(DAY, 0, 1140, 1200), 'free', '落库失败：时段没被占住');
+eq(ctF.data.showDone, false, '落库失败：【绝不能】给客人看成功页');
+ok(log.indexOf('toast: 提交失败，请检查网络后重试') >= 0, '落库失败：如实提示提交失败');
+ok(!!APP.globalData.pending, '落库失败：pending 留着不消费，客人再点一次就是重试');
+fix1();
+
+/* ② 恢复写入之后，同一笔预约能正常提交（说明上面拦住的只是那一次失败） */
+log.length = 0;
+ctF.onConfirm();
+eq(core.BOOKINGS.length, 1, '存储恢复后重试成功');
+eq(ctF.data.showDone, true, '重试成功后正常显示成功页');
+eq(APP.globalData.pending, null, '成功后 pending 才被清掉');
+
+/* ③ 老板改状态落库失败 */
+var odF = loadPage('pages/orders/orders.js');
+odF.onShow();
+var fid = core.BOOKINGS[0].id;
+var fix2 = breakWrites();
+log.length = 0;
+odF.onConfirm(ev({ id: fid }));
+eq(core.findBooking(fid).status, 'pending', '落库失败：状态回滚成待确认');
+eq(odF.data.tabs[0].count, 1, '落库失败：待确认计数没被改花');
+eq(odF.data.list.length, 1, '落库失败：订单仍在待确认列表里（界面没骗老板）');
+ok(log.indexOf('toast: 操作失败，请检查网络后重试') >= 0, '落库失败：如实提示操作失败');
+fix2();
+
+log.length = 0;
+odF.onConfirm(ev({ id: fid }));
+eq(core.findBooking(fid).status, 'confirmed', '存储恢复后重试成功');
+ok(log.indexOf('toast: 已确认') >= 0, '重试成功后才报「已确认」');
+
+/* ④ 老板改价落库失败 */
+var pgF = loadPage('pages/pricing/pricing.js');
+pgF.onLoad();
+pgF.onTapDate(ev({ idx: DAY }));
+pgF.onTapCell(ev({ key: '0|1200' }));
+pgF.onInputPrice({ detail: { value: '77' } });
+var fix3 = breakWrites();
+log.length = 0;
+pgF.onApply();
+eq(core.hasOverride(DAY, 0, 1200), false, '落库失败：手改价已撤回');
+eq(core.priceFor(DAY, 0, 1200), 90, '落库失败：价格回到规则价 ¥90');
+eq(pgF.data.gridRows[12].courts[0].text, '90', '落库失败：格子重画回真实价格');
+eq(pgF.sel.size, 1, '落库失败：选择留着，老板再点一次就是重试');
+ok(log.indexOf('toast: 改价失败，请检查网络后重试') >= 0, '落库失败：如实提示改价失败');
+fix3();
+
+log.length = 0;
+pgF.onApply();
+eq(core.priceFor(DAY, 0, 1200), 77, '存储恢复后重试成功');
+eq(pgF.sel.size, 0, '重试成功后选择才清空');
+
+/* ⑤ 清空数据是两步写（订单 + 价格），任何一步失败都要整体回滚，
+      不能留下「订单清空了、价格还在」这种老板看不出来的半拉子状态 */
+core.setOverride(DAY, 0, 1200, 55);
+var fix4 = breakWrites();
+log.length = 0;
+core.clearAllData().fail(function () { log.push('clearAllData 失败了'); });
+eq(core.BOOKINGS.length, 1, '清空失败：订单全回来了');
+eq(core.priceFor(DAY, 0, 1200), 55, '清空失败：手改价也回来了');
+ok(log.indexOf('clearAllData 失败了') >= 0, '清空失败会走到 .fail，页面才能如实报错');
+fix4();
+
+core.clearAllData();
+eq(core.BOOKINGS.length, 0, '存储恢复后清空成功');
+
+/* ⑥ 对一条已经不存在的订单点「确认」：core 返回 null 而不是 task，
+      页面不能崩在 null.done 上，也不能报假的成功 */
+log.length = 0;
+odF.onConfirm(ev({ id: 'B不存在的单号' }));
+ok(log.indexOf('toast: 已确认') < 0, '订单不存在时不报假的成功');
+eq(odF.data.list.length, 0, '订单不存在时列表照常重画（没崩）');
 
 /* ══════════════════════════════════════════════════ */
 console.log('\n── 输入框的静态约定 ────────────────────────');

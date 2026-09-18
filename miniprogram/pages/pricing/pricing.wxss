@@ -143,7 +143,9 @@
   display: flex;
 }
 
-.half {
+/* 一格 = 一小时（和客人页一致）。原来一行里并排两个半小时格，
+   所以有过 .half + .half 的分隔虚线、.half.hide 的占位隐藏 —— 都没了。 */
+.cell {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -153,16 +155,14 @@
   color: #1A1A1A;
   position: relative;
 }
-.half + .half { border-left: 1rpx dashed #E4E4E4; }
-.half.hide { visibility: hidden; }
 
 /* 手改过的格子：橙底 + 右上角小点 */
-.half.override {
+.cell.override {
   background: #FFF4E5;
   color: #C97C0A;
   font-weight: 600;
 }
-.half.override::after {
+.cell.override::after {
   content: '';
   position: absolute;
   top: 8rpx;
@@ -173,12 +173,12 @@
   background: #FF9500;
 }
 
-.half.selected {
+.cell.selected {
   background: #1989FA;
   color: #fff;
   font-weight: 600;
 }
-.half.selected::after { display: none; }
+.cell.selected::after { display: none; }
 
 /* ── 工具条 ─────────────────────────────────── */
 .toolbar {

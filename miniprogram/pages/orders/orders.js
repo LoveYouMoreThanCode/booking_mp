@@ -80,6 +80,25 @@ Page({
     this.setData({ active: key }, () => this.render());
   },
 
+  /* 四个改状态的入口（卡片里的确认 / 列表上的确认 / 取消 / 恢复）
+     共用一套收尾。改状态是异步的：本地当场回来，云端要等网络。
+     成功就重画 + 报成功；失败也重画 —— 内存里已经回滚成原状态了，
+     重画才能把那张卡片从「已确认」弹回「待确认」，否则界面在骗老板。 */
+  commit(t, okText, icon) {
+    /* 订单可能已经不在内存里了（列表刷过一轮、数据被清空过）。
+       这时 core 返回 null 而不是 task —— 什么都不做、重画一次就好：
+       界面会显示真实情况，不该报一个假的成功，也不该崩在这一行。 */
+    if (!t) { this.render(); return; }
+
+    t.done(() => {
+      this.render();
+      wx.showToast({ title: okText, icon: icon || 'success' });
+    }).fail(() => {
+      this.render();
+      wx.showToast({ title: '操作失败，请检查网络后重试', icon: 'none' });
+    });
+  },
+
   /* ── 操作 ───────────────────────────────────────── */
   onTapCard(e) {
     const id = e.currentTarget.dataset.id;
@@ -99,9 +118,7 @@ Page({
       showCancel: b.status === core.PENDING,
       success: r => {
         if (r.confirm && b.status === core.PENDING) {
-          core.confirmBooking(id, '电话已确认');
-          this.render();
-          wx.showToast({ title: '已确认', icon: 'success' });
+          this.commit(core.confirmBooking(id, '电话已确认'), '已确认');
         }
       },
     });
@@ -115,9 +132,7 @@ Page({
 
   onConfirm(e) {
     const id = e.currentTarget.dataset.id;
-    core.confirmBooking(id, '电话已确认');
-    this.render();
-    wx.showToast({ title: '已确认', icon: 'success' });
+    this.commit(core.confirmBooking(id, '电话已确认'), '已确认');
   },
 
   onCancel(e) {
@@ -129,9 +144,7 @@ Page({
       confirmColor: '#FA5151',
       success: r => {
         if (!r.confirm) return;
-        core.cancelBooking(id);
-        this.render();
-        wx.showToast({ title: '已取消', icon: 'none' });
+        this.commit(core.cancelBooking(id), '已取消', 'none');
       },
     });
   },
@@ -151,15 +164,13 @@ Page({
     if (clash.length) {
       wx.showModal({
         title: '时段已被占用',
-        content: `${clash.length} 个半小时档已经被其他客人订走了，无法恢复。`,
+        content: `${clash.length} 个小时已经被其他客人订走，无法恢复。`,
         showCancel: false,
       });
       return;
     }
 
-    core.setBookingStatus(id, core.PENDING);
-    this.render();
-    wx.showToast({ title: '已恢复为待确认', icon: 'none' });
+    this.commit(core.setBookingStatus(id, core.PENDING), '已恢复为待确认', 'none');
   },
 
   goPricing() {

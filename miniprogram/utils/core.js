@@ -1,7 +1,15 @@
 /* ══════════════════════════════════════════════════════════════
-   utils/core.js —— 三个页面共用的配置与业务逻辑
-   与 prototype/core.js 同源，只把存储层换成了小程序 API。
+   utils/core.js —— 四个页面共用的配置与业务逻辑
+   与 prototype/core.js 同源，存储层已抽到 utils/store.js。
    ══════════════════════════════════════════════════════════════ */
+
+const store = require('./store.js');
+
+/* 冷启动第一屏：模块加载时同步读一次本地镜像。
+   页面第一次 buildGrid() 就有价格、有待/满状态，不用等网络。
+   接云开发后这一步读的仍然是本地镜像，云端结果由 refresh() 补上 ——
+   这就是「本地缓存先渲染，云端结果回来再刷新」里的前半句。 */
+const CACHE0 = store.readCache();
 
 /* ── 配置区 ──────────────────────────────────────────────── */
 const CONFIG = {
@@ -9,21 +17,23 @@ const CONFIG = {
   openHour:   8,      // 营业开始
   closeHour:  22,     // 营业结束
 
-  // 两个粒度是分开的，别搞混：
-  //   slotMin —— 计价粒度。价格按半小时算，管理员也能按半小时改价。
+  // 计价粒度和预定粒度【都是 1 小时】，和客人界面上的一格一致：
+  //   slotMin —— 计价粒度。老板改价页一格就是一小时，填 90 这一小时就是 90。
   //   bookMin —— 预定粒度。客人最少订 1 小时，界面上一格就是一小时。
-  // 客人看到的是「一小时一个总价」，那个总价是这一小时里两个半小时价的和。
-  slotMin:    30,
+  // 两个值保持相等即可，两边的网格都跟着它们走。
+  slotMin:    60,
   bookMin:    60,
 
   daysAhead:  7,      // 可预约未来几天
   nightStart: 18,     // 晚间时段从几点开始
 
-  // 默认规则价（元 / 半小时）—— 管理端可逐格覆盖
+  // 默认规则价（元 / 小时，也就是上面 slotMin 的那一格）—— 管理端可逐格覆盖。
+  // ⚠️ 这几条原来是「元 / 半小时」。slotMin 从 30 改成 60 时必须一起翻倍，
+  //    否则客人看到的价格会整体打对折。
   rates: {
-    weekdayDay:   30,
-    weekdayNight: 45,
-    weekend:      50,
+    weekdayDay:   60,
+    weekdayNight: 90,
+    weekend:      100,
   },
 
   // 管理端入口口令（长按首页标题触发）。
@@ -42,7 +52,7 @@ for (let m = CONFIG.openHour * 60; m < CONFIG.closeHour * 60; m += CONFIG.slotMi
 }
 
 // 每小时的起始分钟数，例如 [480, 540, 600, ...]
-// 管理端改价页按这个分行（每行两个半小时格）
+// 管理端改价页按这个分行（一行就是一小时）
 const HOURS = [];
 for (let m = CONFIG.openHour * 60; m < CONFIG.closeHour * 60; m += 60) {
   HOURS.push(m);
@@ -108,19 +118,78 @@ function rulePrice(date, minutes) {
    覆盖表按【真实日期】存，不按"第几天"。否则跨过零点后，
    管理员今天手改的价格会整体错位到另一天。
    key 形如 "2026-09-17|2|1080"
+
+   ⚠️ 这张表【必须落存储】。它原来是个纯内存对象，于是老板在改价页
+      改完价、关掉小程序再打开，价格全回到规则价 —— 真出过的 bug。
    ──────────────────────────────────────────────────────── */
-const PRICE_OVERRIDES = {};
+/* 价格表从本地镜像里来（模块加载时读的那一次，见文件顶部的 CACHE0）。
+   存储那头的读写细节全在 store.js，这里只留一个名字。 */
+const PRICE_OVERRIDES = CACHE0.prices;
+
+/* 改价的公共收尾：内存里已经改好了，这里只负责落库，失败再撤回。
+
+   ⚠️ 撤回只回滚【这次动过的 key】，不整表写回 —— 云端可能有别人
+      同时在改别的格子，整表覆盖会把他的改动一起抹掉。 */
+function snapKeys(keys) {
+  return keys.map(k => ({ key: k, had: has(PRICE_OVERRIDES, k), old: PRICE_OVERRIDES[k] }));
+}
+
+function commitPrices(undo) {
+  const out = store.makeTask();
+  store.savePrices(PRICE_OVERRIDES)
+    .done(() => out.settle(null, true))
+    .fail(err => {
+      undo.forEach(u => { if (u.had) PRICE_OVERRIDES[u.key] = u.old; else delete PRICE_OVERRIDES[u.key]; });
+      out.settle(err);
+    });
+  return out;
+}
+
+/* 整批换掉价格表的内容（refresh 用）。同样只原地增删，不换对象。 */
+function applyPrices(map) {
+  Object.keys(PRICE_OVERRIDES).forEach(k => delete PRICE_OVERRIDES[k]);
+  Object.keys(map || {}).forEach(k => { PRICE_OVERRIDES[k] = map[k]; });
+}
 
 const ovKey = (dayIdx, ci, min) => `${toDateKey(DATES[dayIdx])}|${ci}|${min}`;
 
 const hasOverride = (dayIdx, ci, min) => has(PRICE_OVERRIDES, ovKey(dayIdx, ci, min));
 
 function setOverride(dayIdx, ci, min, price) {
-  PRICE_OVERRIDES[ovKey(dayIdx, ci, min)] = price;
+  const k = ovKey(dayIdx, ci, min);
+  const undo = snapKeys([k]);
+  PRICE_OVERRIDES[k] = price;
+  return commitPrices(undo);
 }
 
 function clearOverride(dayIdx, ci, min) {
-  delete PRICE_OVERRIDES[ovKey(dayIdx, ci, min)];
+  const k = ovKey(dayIdx, ci, min);
+  const undo = snapKeys([k]);
+  delete PRICE_OVERRIDES[k];
+  return commitPrices(undo);
+}
+
+/* 批量版：改价页「应用到选中」一次能选 56 格（整张表），逐格写等于把整张表
+   序列化几十次 —— 一次写完。接云开发后这一条对应【一次】云函数调用，
+   而不是 56 次。keys 是 "ci|min" 字符串数组，和客人页的选择同一套格式。 */
+function setOverrides(dayIdx, keys, price) {
+  const ks = keys.map(k => {
+    const [ci, min] = k.split('|').map(Number);
+    return ovKey(dayIdx, ci, min);
+  });
+  const undo = snapKeys(ks);               // 必须在改之前拍快照
+  ks.forEach(k => { PRICE_OVERRIDES[k] = price; });
+  return commitPrices(undo);
+}
+
+function clearOverrides(dayIdx, keys) {
+  const ks = keys.map(k => {
+    const [ci, min] = k.split('|').map(Number);
+    return ovKey(dayIdx, ci, min);
+  });
+  const undo = snapKeys(ks);
+  ks.forEach(k => delete PRICE_OVERRIDES[k]);
+  return commitPrices(undo);
 }
 
 /** 最终价格 = 管理员手改值 ?? 规则价 */
@@ -135,7 +204,7 @@ function priceFor(dayIdx, ci, min) {
    时段，我们允许，所以不能按时段的开始时刻去卡。
    ──────────────────────────────────────────────────────── */
 
-/** 一个计价格（半小时）是否已过 */
+/** 一个计价档（一小时）是否已过 */
 function isPast(dayIdx, minutes) {
   return isPastSpan(dayIdx, minutes, minutes + CONFIG.slotMin);
 }
@@ -150,11 +219,11 @@ function isPastSpan(dayIdx, from, to) {
    预约数据
    ══════════════════════════════════════════════════════════════
    ⚠️ 当前是「单机版」：数据存在各自手机本地，客人和老板的数据不通。
-   要跑通双角色流程，把下面 readStore / writeStore 换成云开发调用即可，
-   其余逻辑不用动。见 README 的「接云开发」一节。
+   存储细节已经全部抽到 utils/store.js —— 接云开发时【只改那个文件里的
+   一行】`const backend = localBackend`，这里的业务逻辑一行都不动。
+   见 README 的「接云开发」一节。
    ══════════════════════════════════════════════════════════════ */
 
-const STORE_KEY = 'mp_bookings_v1';
 const SEED_FLAG = 'mp_seeded_v1';
 
 const PENDING = 'pending', CONFIRMED = 'confirmed', CANCELLED = 'cancelled';
@@ -165,15 +234,44 @@ const STATUS_TEXT = {
   [CANCELLED]: '已取消',
 };
 
-let BOOKINGS = readStore();
+/* 内存工作集：本地镜像读出来的那一份。
+   ⚠️ 从此【只原地增删，永不整体赋值】—— 页面和测试都握着这个数组本身，
+      一旦换成新数组，它们看到的就是旧数据，而且界面会静默不更新。
+      要整批换内容请用 applyBookings()。 */
+const BOOKINGS = CACHE0.bookings;
 
-function readStore() {
-  try { return wx.getStorageSync(STORE_KEY) || []; }
-  catch (e) { return []; }
+function applyBookings(list) {
+  BOOKINGS.length = 0;
+  (list || []).forEach(b => BOOKINGS.push(b));
 }
 
-function writeStore() {
-  try { wx.setStorageSync(STORE_KEY, BOOKINGS); } catch (e) {}
+/* 写回存储（整表覆盖）。只给「整批替换」的场景用（演示数据、清空数据）；
+   单条订单的增改走 store.insert / store.update —— 云端那两条各对应一次
+   云函数调用，整表替换则会用一台手机的数据盖掉所有人的。 */
+function writeStore() { return store.replaceBookings(BOOKINGS); }
+
+/**
+ * 拉一次权威数据，覆盖内存缓存，然后回调。
+ *
+ * 契约（换云开发时最要紧的一条）：
+ *   ① cb 【一定会】被调用 —— 成功、失败都调；失败时界面继续显示缓存里的旧数据。
+ *   ② 本地后端【同步】回调，云端后端异步回调。
+ *   ③ 所以「拿到数据之后要做的事」必须写在 cb 里，
+ *      【绝不能】写在 refresh() 的下一行 —— 本地能跑，云端必崩。
+ */
+function refresh(cb) {
+  const t = store.fetchAll();
+  t.done(d => { applyBookings(d.bookings); applyPrices(d.prices); });
+  t.fail(err => {
+    // 失败【不清缓存】：宁可用旧数据，也别把界面清空
+    if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+      console.warn('取数失败，继续用本地缓存', err);
+    }
+  });
+  const wake = () => { if (cb) cb(); };
+  t.done(wake);
+  t.fail(wake);
+  return t;
 }
 
 /** 日期跨天时调用：重算日期表并把过期的日期索引拉回 0 */
@@ -190,7 +288,11 @@ function refreshDates() {
    ② 把每段价格【快照】存进订单。之后管理员改价不会、
       也不能影响已提交的订单。
 
-   返回 { ok, booking, skipped }
+   【返回 task】，.done 里是 { ok, booking, skipped }，.fail 里是落库失败。
+
+   ③ 乐观写入：订单先塞进内存，客人点完立刻看到「已提交」，不等落库。
+      落库失败再把这一条摘掉 —— 否则客人会看到一条只存在于内存里的
+      假订单，他以为约上了，老板那头什么都没有。
    ──────────────────────────────────────────────────────── */
 function createBooking({ dayIdx, groups, phone, name, note }) {
   const dateKey = toDateKey(DATES[dayIdx]);
@@ -207,7 +309,8 @@ function createBooking({ dayIdx, groups, phone, name, note }) {
     }
   });
 
-  if (!free.length) return { ok: false, booking: null, skipped };
+  // 一个格子都没剩下：没东西可写，直接给一个已 settle 的结果
+  if (!free.length) return store.fetched(null, { ok: false, booking: null, skipped });
 
   const items = [];
   let total = 0;
@@ -236,21 +339,43 @@ function createBooking({ dayIdx, groups, phone, name, note }) {
     reply: '',
   };
 
-  BOOKINGS.push(b);
-  writeStore();
-  return { ok: true, booking: b, skipped };
+  BOOKINGS.push(b);                        // 乐观：界面当场就能看到这一条
+
+  const out = store.makeTask();
+  store.insert(b)
+    .done(() => out.settle(null, { ok: true, booking: b, skipped }))
+    .fail(err => {
+      const i = BOOKINGS.indexOf(b);
+      if (i >= 0) BOOKINGS.splice(i, 1);   // 回滚：别留一条只活在内存里的订单
+      out.settle(err);
+    });
+  return out;
 }
 
 const findBooking = id => BOOKINGS.find(b => b.id === id);
 
+/**
+ * 改订单状态。返回 task：.done 给订单，.fail 给落库错误。
+ * 订单不存在时返回 null（保持原来的语义）。
+ */
 function setBookingStatus(id, status, reply) {
   const b = findBooking(id);
   if (!b) return null;
+
+  // 乐观 + 回滚：老板点「确认」，卡片当场跳到已确认那栏；写失败再弹回去
+  const prev = { status: b.status, updatedAt: b.updatedAt, reply: b.reply };
   b.status = status;
   b.updatedAt = Date.now();
   if (reply !== undefined) b.reply = reply;
-  writeStore();
-  return b;
+
+  const out = store.makeTask();
+  store.update(id, { status: b.status, updatedAt: b.updatedAt, reply: b.reply })
+    .done(() => out.settle(null, b))
+    .fail(err => {
+      Object.assign(b, prev);
+      out.settle(err);
+    });
+  return out;
 }
 
 const confirmBooking = (id, reply) => setBookingStatus(id, CONFIRMED, reply);
@@ -394,7 +519,7 @@ function seedDemoBookings() {
     };
   };
 
-  BOOKINGS = [
+  applyBookings([
     mk(1, 1, H(19),   H(20),   '13700137003', '王强', '带小朋友，麻烦留矮网', PENDING, 0.4),
     mk(1, 3, H(20),   H(21),   '13600136004', '陈静', '',                     PENDING, 1.2),
     mk(2, 0, H(9),    H(10),   '13500135005', '刘洋', '公司团建，8 个人',     PENDING, 2.6),
@@ -410,25 +535,47 @@ function seedDemoBookings() {
     mk(4, 2, H(21),   H(22),   '15800158012', '黄鹏', '晚场，别锁门',         CONFIRMED, 4),
 
     mk(2, 0, H(14),   H(15),   '15700157013', '徐婷', '',                     CANCELLED, 8),
-  ];
+  ]);
 
   try { wx.setStorageSync(SEED_FLAG, 1); } catch (e) {}
   writeStore();
 }
 
+/**
+ * 清空全部数据（订单 + 手改价）。返回 task。
+ *
+ * 两步写（订单、价格）都要成功才算清干净；任何一步失败就整体回滚 ——
+ * 否则会留下「订单清空了、价格还在」这种半拉子状态，老板看不出来。
+ */
 function clearAllData() {
-  BOOKINGS = [];
+  const prevBookings = BOOKINGS.slice();
+  const prevPrices = Object.assign({}, PRICE_OVERRIDES);
+  const rollback = () => { applyBookings(prevBookings); applyPrices(prevPrices); };
+
+  applyBookings([]);                    // 原地清空，别换数组（页面握着它）
   Object.keys(PRICE_OVERRIDES).forEach(k => delete PRICE_OVERRIDES[k]);
   try { wx.setStorageSync(SEED_FLAG, 1); } catch (e) {}
-  writeStore();
+
+  const out = store.makeTask();
+  const fail = err => { rollback(); out.settle(err); };
+  store.replaceBookings([])
+    .done(() => {
+      // 手改价也要清掉，否则「清空数据」后价格还是旧的
+      store.savePrices({})
+        .done(() => out.settle(null, true))
+        .fail(fail);
+    })
+    .fail(fail);
+  return out;
 }
 
 module.exports = {
   CONFIG, SLOTS, HOURS, BOOKS,
   get DATES() { return DATES; },
-  buildDates, refreshDates,
+  buildDates, refreshDates, refresh,
   fmt, toDateKey, dateLabel, prettyDateKey, nowMinutes,
   rulePrice, priceFor, hasOverride, setOverride, clearOverride,
+  setOverrides, clearOverrides,
   isPast, isPastSpan,
   PENDING, CONFIRMED, CANCELLED, STATUS_TEXT,
   createBooking, findBooking, setBookingStatus, confirmBooking, cancelBooking,

@@ -63,26 +63,21 @@ Page({
     const n = CONFIG.courts.length;
     let overrides = 0;
 
+    /* 一格 = 一小时，和客人页一模一样（CONFIG.slotMin 就是 60）。
+       所以这里不再有「一行两格、两格拼成一小时」那回事 ——
+       一行就是每片场地各一格，填多少这一小时就多少。 */
     const gridRows = core.HOURS.map(h => {
       const courts = [];
       for (let ci = 0; ci < n; ci++) {
-        const halves = [];
-        for (let hi = 0; hi < 2; hi++) {
-          const min = h + hi * CONFIG.slotMin;
-          if (min >= CONFIG.closeHour * 60) {
-            halves.push({ key: `x${ci}_${min}`, text: '', cls: 'half hide' });
-            continue;
-          }
-          const ov = core.hasOverride(day, ci, min);
-          if (ov) overrides++;
-          const key = `${ci}|${min}`;
-          halves.push({
-            key,
-            text: String(core.priceFor(day, ci, min)),
-            cls: this.halfCls(ov, this.sel.has(key)),
-          });
-        }
-        courts.push({ ci, halves });
+        const ov = core.hasOverride(day, ci, h);
+        if (ov) overrides++;
+        const key = `${ci}|${h}`;
+        courts.push({
+          ci,
+          key,
+          text: String(core.priceFor(day, ci, h)),
+          cls: this.cellCls(ov, this.sel.has(key)),
+        });
       }
       return { label: core.fmt(h), min: h, courts };
     });
@@ -90,15 +85,15 @@ Page({
     this.setData({ gridRows, overrideCount: overrides });
   },
 
-  halfCls(ov, selected) {
-    if (selected) return 'half selected';
-    return ov ? 'half override' : 'half';
+  cellCls(ov, selected) {
+    if (selected) return 'cell selected';
+    return ov ? 'cell override' : 'cell';
   },
 
   /* ── 选择 ───────────────────────────────────────── */
 
   /** 点单格：选中 / 取消 */
-  onTapHalf(e) {
+  onTapCell(e) {
     const key = e.currentTarget.dataset.key;
     if (!key || key[0] === 'x') return;
     if (this.sel.has(key)) this.sel.delete(key); else this.sel.add(key);
@@ -108,24 +103,13 @@ Page({
   /** 点场地表头：整列（该场地今天全部时段）反选 */
   onTapCourtHead(e) {
     const ci = +e.currentTarget.dataset.ci;
-    const keys = [];
-    core.SLOTS.forEach(min => {
-      if (min < CONFIG.closeHour * 60) keys.push(`${ci}|${min}`);
-    });
-    this.toggleMany(keys);
+    this.toggleMany(core.SLOTS.map(min => `${ci}|${min}`));
   },
 
-  /** 点时间列：整行（该小时两格 × 全部场地）反选 */
+  /** 点时间列：整行（这一小时 × 全部场地）反选 */
   onTapRowLabel(e) {
     const h = +e.currentTarget.dataset.min;
-    const keys = [];
-    CONFIG.courts.forEach((_, ci) => {
-      for (let hi = 0; hi < 2; hi++) {
-        const min = h + hi * CONFIG.slotMin;
-        if (min < CONFIG.closeHour * 60) keys.push(`${ci}|${min}`);
-      }
-    });
-    this.toggleMany(keys);
+    this.toggleMany(CONFIG.courts.map((_, ci) => `${ci}|${h}`));
   },
 
   /** 整批：只要有一个没选中，就全部选中；否则全部取消 */
@@ -171,16 +155,24 @@ Page({
     }
 
     const day = this.data.currentDay;
-    this.sel.forEach(k => {
-      const [ci, min] = k.split('|').map(Number);
-      core.setOverride(day, ci, min, price);
-    });
-
     const n = this.sel.size;
-    this.sel.clear();
-    this.setData({ priceInput: '' });
-    this.repaint();
-    wx.showToast({ title: `已改 ${n} 个时段`, icon: 'none' });
+    /* 一次选中最多 56 格（整张表）。逐格 setOverride 会把整张价格表序列化几十次，
+       所以走批量版：一次写完（接云开发后这一条对应一次云函数调用）。
+
+       落库是异步的：本地当场回来，云端要等网络。成功才清空选择并重画；
+       失败时内存已经回滚，重画一次把格子弹回真实价格，选择【留着】——
+       老板直接再点一次「应用」就是重试。 */
+    core.setOverrides(day, [...this.sel], price)
+      .done(() => {
+        this.sel.clear();
+        this.setData({ priceInput: '' });
+        this.repaint();
+        wx.showToast({ title: `已改 ${n} 个时段`, icon: 'none' });
+      })
+      .fail(() => {
+        this.repaint();
+        wx.showToast({ title: '改价失败，请检查网络后重试', icon: 'none' });
+      });
   },
 
   /** 恢复规则价：把覆盖删掉，价格回到 CONFIG.rates 算出来的值 */
@@ -190,15 +182,17 @@ Page({
       return;
     }
     const day = this.data.currentDay;
-    this.sel.forEach(k => {
-      const [ci, min] = k.split('|').map(Number);
-      core.clearOverride(day, ci, min);
-    });
-
     const n = this.sel.size;
-    this.sel.clear();
-    this.repaint();
-    wx.showToast({ title: `已恢复 ${n} 个时段`, icon: 'none' });
+    core.clearOverrides(day, [...this.sel])    // 同样走批量版
+      .done(() => {
+        this.sel.clear();
+        this.repaint();
+        wx.showToast({ title: `已恢复 ${n} 个时段`, icon: 'none' });
+      })
+      .fail(() => {
+        this.repaint();
+        wx.showToast({ title: '恢复失败，请检查网络后重试', icon: 'none' });
+      });
   },
 
   /* ── 危险操作 ───────────────────────────────────── */
@@ -210,10 +204,18 @@ Page({
       confirmColor: '#FA5151',
       success: r => {
         if (!r.confirm) return;
-        core.clearAllData();
-        this.sel.clear();
-        this.repaint();
-        wx.showToast({ title: '已清空', icon: 'none' });
+        /* 清空是两步写（订单 + 价格），两步都成了才算清干净。
+           失败会把两边一起回滚，所以这里只要如实报错。 */
+        core.clearAllData()
+          .done(() => {
+            this.sel.clear();
+            this.repaint();
+            wx.showToast({ title: '已清空', icon: 'none' });
+          })
+          .fail(() => {
+            this.repaint();
+            wx.showToast({ title: '清空失败，请检查网络后重试', icon: 'none' });
+          });
       },
     });
   },
