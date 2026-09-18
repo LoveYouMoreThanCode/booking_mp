@@ -135,20 +135,61 @@ function snapKeys(keys) {
 }
 
 function commitPrices(undo) {
+  /* ⚠️ 发的是【这次动过的那几格】，不是整张价格表。
+     整表覆盖之后，另一个管理员同时改的别的格子会被一起抹掉 ——
+     而且谁都不会发现：各自屏幕上都显示着自己改的值。 */
+  const set = {}, del = [];
+  undo.forEach(u => {
+    if (has(PRICE_OVERRIDES, u.key)) set[u.key] = PRICE_OVERRIDES[u.key];
+    else del.push(u.key);
+  });
+
   const out = store.makeTask();
-  store.savePrices(PRICE_OVERRIDES)
+  store.savePrices({ set, del }, adminPasscode())
     .done(() => out.settle(null, true))
     .fail(err => {
-      undo.forEach(u => { if (u.had) PRICE_OVERRIDES[u.key] = u.old; else delete PRICE_OVERRIDES[u.key]; });
+      /* 部分失败时只回滚【没写进去】的那几格。把写成功的也回滚，
+         等于从界面上抹掉一个已经存好的值 —— 下一次 refresh 之前
+         老板看到的都是假的。 */
+      const failed = err && err.cloudFailed && err.cloudFailed.length ? err.cloudFailed : null;
+      undo.forEach(u => {
+        if (failed && failed.indexOf(u.key) < 0) return;
+        if (u.had) PRICE_OVERRIDES[u.key] = u.old; else delete PRICE_OVERRIDES[u.key];
+      });
       out.settle(err);
     });
   return out;
 }
 
-/* 整批换掉价格表的内容（refresh 用）。同样只原地增删，不换对象。 */
+/** 把 store 的失败翻成一句能给老板看的话。
+    分得开很重要：「被抢了」是正常的业务结果，让人一直重试是错的；
+    「口令失效」重试一万次也没用。 */
+function errText(err, fallback) {
+  const r = err && err.cloudReason;
+  if (r === 'forbidden')  return '管理口令已失效，请退出管理页重新进入';
+  if (r === 'slot-taken') return '时段已被其他客人订走，无法恢复';
+  if (r === 'busy')       return '同时提交的人较多，请再试一次';
+  if (r === 'all-taken')  return '抱歉，你选的时段已不可预约';
+  /* 「状态未知」= 占用表不见了（比如有人清空到一半断了）。这不是网络问题，
+     让客人「检查网络后重试」是句假话 —— 重试一万次都一样。 */
+  if (r === 'state-unknown') return '系统数据异常，请稍后再试或联系管理员';
+  /* fallback 给调用方留一句更贴切的话 —— 客人看到「提交失败」比
+     「操作失败」清楚得多，而老板那边「操作失败」才是对的。 */
+  return fallback || '操作失败，请检查网络后重试';
+}
+
+/* 整批换掉价格表的内容（refresh 用）。同样只原地增删，不换对象。
+
+   ⚠️ 只收【有限的数字】。价格是「外部数据进内存」的另一条路，而它比订单
+   更危险：spanPrice 是用 `+=` 把那几格加起来算总价的，混进来一个字符串
+   就变成字符串拼接（60 + "90" = "6090"），客人看到的总价是天价，
+   而页面上没有任何东西看起来是错的 —— 每一格都显示得好好的。 */
 function applyPrices(map) {
   Object.keys(PRICE_OVERRIDES).forEach(k => delete PRICE_OVERRIDES[k]);
-  Object.keys(map || {}).forEach(k => { PRICE_OVERRIDES[k] = map[k]; });
+  Object.keys(map || {}).forEach(k => {
+    const p = Number(map[k]);
+    if (isFinite(p) && p >= 0) PRICE_OVERRIDES[k] = p;
+  });
 }
 
 const ovKey = (dayIdx, ci, min) => `${toDateKey(DATES[dayIdx])}|${ci}|${min}`;
@@ -238,9 +279,29 @@ const STATUS_TEXT = {
       要整批换内容请用 applyBookings()。 */
 const BOOKINGS = CACHE0.bookings;
 
+/* ⚠️ 云函数回来的是【外部数据】：控制台手改过、或者哪天云函数改了形状，
+   都可能塞进来一条缺胳膊少腿的记录。这里【是它进内存的唯一入口】，
+   所以形状在这一处兜住 —— 一条坏记录不该让整张列表崩掉：老板看到的
+   是一屏空，而没有任何线索能指向那一行。
+
+   只补「会被索引进去」的字段（items / slotKeys），不编造内容。
+   缺 id 或缺 dateKey 的记录【用不了】：取消/确认/恢复都按 id 找它，
+   按天查询按 dateKey 找它，排序也要拿它比 —— 留着只会在别处炸。
+   所以丢掉，并且说出来（静默丢数据是这里最不该做的事）。 */
 function applyBookings(list) {
   BOOKINGS.length = 0;
-  (list || []).forEach(b => BOOKINGS.push(b));
+  let dropped = 0;
+  (list || []).forEach(b => {
+    if (!b || typeof b !== 'object') { dropped++; return; }
+    if (typeof b.id !== 'string' || !b.id) { dropped++; return; }
+    if (typeof b.dateKey !== 'string' || !b.dateKey) { dropped++; return; }
+    if (!Array.isArray(b.items)) b.items = [];
+    if (!Array.isArray(b.slotKeys)) b.slotKeys = [];
+    BOOKINGS.push(b);
+  });
+  if (dropped && typeof console !== 'undefined' && typeof console.warn === 'function') {
+    console.warn('丢掉 ' + dropped + ' 条缺 id/dateKey 的订单记录（形状不对，界面用不了它）');
+  }
 }
 
 /**
@@ -368,16 +429,49 @@ function createBooking({ dayIdx, groups, phone, name, note }) {
     reply: '',
   };
 
+  /* 每一格多少钱，交给云函数去加。服务端【不做定价】—— 规则价怎么算
+     仍然只有这一份，云函数只负责决定哪些格子活下来、把活下来的加起来。 */
+  const slotPrices = {};
+  free.forEach(f => { slotPrices[`${f.ci}|${f.min}`] = priceFor(dayIdx, f.ci, f.min); });
+
   BOOKINGS.push(b);                        // 乐观：界面当场就能看到这一条
 
+  const drop = () => {
+    const i = BOOKINGS.indexOf(b);
+    if (i >= 0) BOOKINGS.splice(i, 1);     // 回滚：别留一条只活在内存里的订单
+  };
+
   const out = store.makeTask();
-  store.insert(b)
-    .done(() => out.settle(null, { ok: true, booking: b, skipped }))
-    .fail(err => {
+  store.insert(b, { slotPrices, gap: CONFIG.slotMin })
+    .done(res => {
+      /* ── 服务端是权威 ────────────────────────────────────
+         我们刚才算的 free/skipped 用的是【客户端内存里的占用】，
+         可能已经过期（从渲染到点提交之间有人订走了）。云函数在事务
+         里重算了一遍，那一份才是真正落库的。 */
+      if (!res || !res.ok) {
+        /* 一个格子都没活下来。云函数那边没写任何东西，所以把乐观的
+           那条摘掉即可 —— 绝不能给客人看成功页。 */
+        drop();
+        out.settle(null, { ok: false, booking: null, skipped: (res && res.skipped) || skipped });
+        return;
+      }
+
+      const stored = res.booking;
       const i = BOOKINGS.indexOf(b);
-      if (i >= 0) BOOKINGS.splice(i, 1);   // 回滚：别留一条只活在内存里的订单
-      out.settle(err);
-    });
+      /* ⚠️ stored === b 时必须跳过（本地后端回的就是传进去的那个对象）。
+         不跳的话下面这套「先清空再覆盖」会把订单自己抹成空对象 ——
+         因为清的和覆盖的是同一个东西。 */
+      if (i >= 0 && stored && stored !== BOOKINGS[i]) {
+        /* ⚠️ 原地改，不换数组元素 —— 页面握着 BOOKINGS 里的对象引用，
+           换成新对象的话它们看到的还是旧的，界面会静默不更新。 */
+        Object.keys(BOOKINGS[i]).forEach(k => delete BOOKINGS[i][k]);
+        Object.assign(BOOKINGS[i], stored);
+      }
+      /* skipped 用【服务端】那份：它才是事务里重算过的。本地后端没有
+         服务端的视角（不返回这个字段），那就退回用客户端自己算的那份。 */
+      out.settle(null, { ok: true, booking: stored, skipped: res.skipped || skipped });
+    })
+    .fail(err => { drop(); out.settle(err); });
   return out;
 }
 
@@ -398,7 +492,11 @@ function setBookingStatus(id, status, reply) {
   if (reply !== undefined) b.reply = reply;
 
   const out = store.makeTask();
-  store.update(id, { status: b.status, updatedAt: b.updatedAt, reply: b.reply })
+  /* ⚠️ 占用检查【不在这里做】。恢复一单「已取消」之前要确认那些格子没被
+     别人重新订走，而客户端内存里的列表随时是过期的 —— 两个管理员各拿
+     一份过期列表，可以同时把一单恢复到同一个格子上。那个检查在
+     updateBooking 的事务里，这里只负责把结果报上来。 */
+  store.update(id, { status: b.status, updatedAt: b.updatedAt, reply: b.reply }, adminPasscode())
     .done(() => out.settle(null, b))
     .fail(err => {
       Object.assign(b, prev);
@@ -537,15 +635,12 @@ function clearAllData() {
   Object.keys(PRICE_OVERRIDES).forEach(k => delete PRICE_OVERRIDES[k]);
 
   const out = store.makeTask();
-  const fail = err => { rollback(); out.settle(err); };
-  store.replaceBookings([])
-    .done(() => {
-      // 手改价也要清掉，否则「清空数据」后价格还是旧的
-      store.savePrices({})
-        .done(() => out.settle(null, true))
-        .fail(fail);
-    })
-    .fail(fail);
+  /* 一次调用清三张集合。⚠️ 三段之间的顺序在云函数里写死
+     （occupancy → bookings → prices），客户端不该管也管不着 ——
+     顺序反了会造成「所有格子永远显示满、界面上救不回来」那种状态。 */
+  store.clearAll(adminPasscode())
+    .done(() => out.settle(null, true))
+    .fail(err => { rollback(); out.settle(err); });
   return out;
 }
 
@@ -558,7 +653,7 @@ module.exports = {
   setOverrides, clearOverrides,
   isPast, isPastSpan,
   PENDING, CONFIRMED, CANCELLED, STATUS_TEXT,
-  createBooking, findBooking, setBookingStatus, confirmBooking, cancelBooking,
+  createBooking, findBooking, setBookingStatus, confirmBooking, cancelBooking, errText,
   bookingAt, slotStatus, spanStatus, spanPrice, bookingsByStatus, countByStatus, firstMin,
   timeAgo, isToday, groupSlots, parseKeys, summarize,
   clearAllData,

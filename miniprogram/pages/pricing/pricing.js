@@ -175,14 +175,14 @@ Page({
         this.repaint();
         wx.showToast({ title: `已改 ${n} 个时段`, icon: 'none' });
       })
-      .fail(() => {
+      .fail(err => {
         /* 内存已经回滚了，但云端可能还有别人同时改过价（或者这次写
            只成功了一半）。拉一次权威值 —— 别让老板对着一个他自己
            以为的价格继续改。
 
            ⚠️ 只在【失败】时才 refresh。成功之后立刻 refresh 会和这次
               写入抢：云端把改之前的值又刷回来，看着像「改价没生效」。 */
-        wx.showToast({ title: '改价失败，请检查网络后重试', icon: 'none' });
+        wx.showToast({ title: core.errText(err, '改价失败，请检查网络后重试'), icon: 'none' });
         this.refresh();
       });
   },
@@ -201,8 +201,8 @@ Page({
         this.repaint();
         wx.showToast({ title: `已恢复 ${n} 个时段`, icon: 'none' });
       })
-      .fail(() => {
-        wx.showToast({ title: '恢复失败，请检查网络后重试', icon: 'none' });
+      .fail(err => {
+        wx.showToast({ title: core.errText(err, '恢复失败，请检查网络后重试'), icon: 'none' });
         this.refresh();          // 同上：拉回权威值
       });
   },
@@ -224,8 +224,8 @@ Page({
             this.repaint();
             wx.showToast({ title: '已清空', icon: 'none' });
           })
-          .fail(() => {
-            wx.showToast({ title: '清空失败，请检查网络后重试', icon: 'none' });
+          .fail(err => {
+            wx.showToast({ title: core.errText(err, '清空失败，请检查网络后重试'), icon: 'none' });
             this.refresh();        // 同上：拉回权威值
           });
       },

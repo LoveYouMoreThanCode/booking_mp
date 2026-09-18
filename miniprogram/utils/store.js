@@ -150,21 +150,45 @@ const localBackend = {
     });
   },
 
-  savePrices(map) {
+  /* 和云函数同一个契约：diff = { set: {格子key: 价格}, del: [格子key] }，
+     逐格增删，【不整表覆盖】。原来收的是整张 map —— 那样两个管理员
+     同时改价会互相抹掉，谁都不会发现。 */
+  savePrices(diff) {
     return settleNow(() => {
-      wx.setStorageSync(PRICE_KEY, map || {});
-      return map || {};
+      const d = diff || {};
+      const map = readMap(PRICE_KEY);
+      Object.keys(d.set || {}).forEach(k => { map[k] = d.set[k]; });
+      (d.del || []).forEach(k => { delete map[k]; });
+      wx.setStorageSync(PRICE_KEY, map);
+      return map;
+    });
+  },
+
+  /* 清空。云端版是一次云函数调用（顺序在那边写死），本地这边就是
+     把那两个键抹掉。签名对齐是为了 cloudBackend 能顶上同一个位置。 */
+  clearAll() {
+    return settleNow(() => {
+      wx.setStorageSync(STORE_KEY, []);
+      wx.setStorageSync(PRICE_KEY, {});
+      return true;
     });
   },
 
   /* 下面两个是「按需写」，2b 阶段启用：只动一条订单，不重写整张表。
      云端版对应一次云函数调用。 */
+  /* ⚠️ 返回的是 {ok, booking}，不是订单对象本身 —— 两个后端必须是
+     同一个契约，否则 core.js 那边得按「用的是哪个后端」分两套读法，
+     而在本地永远测不出云端那条分支。
+
+     这里【不返回 skipped】：本地后端没有服务端的视角，它看不到
+     「事务里又发现了几个被抢的格子」。core 那边 res.skipped 为空
+     就退回用客户端自己算的那份 —— 那是本地后端唯一说得准的东西。 */
   insert(b) {
     return settleNow(() => {
       const list = readArr(STORE_KEY);
       list.push(b);
       wx.setStorageSync(STORE_KEY, list);
-      return b;
+      return { ok: true, booking: b };
     });
   },
 
@@ -216,6 +240,12 @@ function unwrapCloud(res) {
   const e = new Error('云函数返回 ok:false: ' + reason + (detail ? ' —— ' + detail : ''));
   e.cloudReason = reason;
   e.cloudDetail = detail;
+  /* 「恢复」被拒时要告诉老板是哪几格被占了，所以把明细带上。
+     core.js 的 errText() 负责把它翻成人话。 */
+  e.cloudTaken = (res && res.taken) || [];
+  /* savePrices 部分失败时，告诉调用方【哪几格】没写进去 —— 它要靠
+     这个决定回滚哪些，而不是把写成功的也一起回滚掉。 */
+  e.cloudFailed = (res && res.failed) || [];
   return e;
 }
 
@@ -267,12 +297,33 @@ const cloudBackend = {
     return out;
   },
 
-  /* ⚠️ 下面四个云函数还没写（第 2 步）。现在调用会拿到
-     「cloud function not found」—— 那是预期的，不是坏了。 */
-  insert(b)          { return callCloud('createBooking',  b); },
-  update(id, patch)  { return callCloud('updateBooking',  { id, patch }); },
-  replaceBookings(l) { return callCloud('clearAll',       { bookings: l }); },
-  savePrices(map)    { return callCloud('savePrices',     { prices: map }); },
+  /* ⚠️ 注意 insert 打的是 createBooking，不是 insertBooking。
+     extra 是「下单要用的、但不属于订单本身」的东西：每格的价钱，
+     以及时段粒度。分成两个参数是故意的 —— 订单对象原样进库，
+     不掺运行时用的字段。 */
+  insert(b, extra) {
+    return callCloud('createBooking', Object.assign({ booking: b }, extra || {}));
+  },
+
+  /* 后三个是管理端操作，必须带上口令 —— 鉴权在云函数里做，
+     客户端只是把口令【在真解锁之后】发出去（见 core.js 的 adminPasscode）。 */
+  update(id, patch, passcode) {
+    return callCloud('updateBooking', { id, patch, passcode });
+  },
+
+  /* diff = { set: {格子key: 价格}, del: [格子key] }
+     ⚠️ 发的是【被改动的那几格】，不是整张价格表 —— 整表覆盖会把
+        另一个管理员同时改的别的格子一起抹掉，而且谁都不会发现。 */
+  savePrices(diff, passcode) {
+    const d = diff || {};
+    return callCloud('savePrices', { set: d.set || {}, del: d.del || [], passcode });
+  },
+
+  /* 清空三张集合，一次调用。顺序在云函数里写死（occupancy → bookings
+     → prices），客户端管不着也不该管。 */
+  clearAll(passcode) {
+    return callCloud('clearAll', { passcode });
+  },
 };
 
 /* ── 后端开关 ────────────────────────────────────────────
@@ -296,10 +347,11 @@ module.exports = {
   makeTask,       // core 要自己造 task（拼业务结果、串两次写），见下面的说明
   fetched,
   fetchAll:         opts        => backend.fetchAll(opts),
-  insert:           b           => backend.insert(b),
-  update:           (id, patch) => backend.update(id, patch),
-  replaceBookings:  list        => backend.replaceBookings(list),
-  savePrices:       map         => backend.savePrices(map),
+  insert:           (b, extra)         => backend.insert(b, extra),
+  update:           (id, patch, code)  => backend.update(id, patch, code),
+  replaceBookings:  list               => backend.replaceBookings(list),
+  savePrices:       (diff, code)       => backend.savePrices(diff, code),
+  clearAll:         code               => backend.clearAll(code),
   _backends,
   _useBackend,
 };

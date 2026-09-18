@@ -105,9 +105,11 @@ Page({
     t.done(() => {
       this.repaint();
       wx.showToast({ title: okText, icon: icon || 'success' });
-    }).fail(() => {
+    }).fail(err => {
       this.repaint();
-      wx.showToast({ title: '操作失败，请检查网络后重试', icon: 'none' });
+      /* 提示语要分得开：口令失效重试一万次也没用，被抢了让人一直重试也是错的。
+         怎么翻由 core.errText 一处决定（有测试盯着）。 */
+      wx.showToast({ title: core.errText(err), icon: 'none' });
     });
   },
 
@@ -161,28 +163,37 @@ Page({
     });
   },
 
+  /* ── 恢复 ────────────────────────────────────────────────
+     ⚠️ 这里【不再】自己查时段有没有被订走。
+     原来那段查的是客户端内存里的列表，而那份列表随时是过期的：两个
+     管理员各拿一份过期的列表，可以同时把一单恢复到同一个已经被占的
+     格子上，「一格一单」当场就没了。
+     现在这个检查在 updateBooking 的事务里做，页面只负责把拒绝的理由
+     摆给老板看。 */
   onRestore(e) {
     const id = e.currentTarget.dataset.id;
     const b = core.findBooking(id);
     if (!b) return;
 
-    // 恢复前查一下时段有没有被重新订走，否则会造出重复占用
-    const clash = b.slotKeys.filter(k => {
-      const [ci, min] = k.split('|').map(Number);
-      const other = core.bookingAt(b.dateKey, ci, min);
-      return other && other.id !== b.id;
+    const t = core.setBookingStatus(id, core.PENDING);
+    if (!t) { this.repaint(); return; }
+
+    t.done(() => {
+      this.repaint();
+      wx.showToast({ title: '已恢复为待确认', icon: 'none' });
+    }).fail(err => {
+      this.repaint();                    // 内存里已经回滚成已取消，重画才对
+      if (err && err.cloudReason === 'slot-taken') {
+        const n = (err.cloudTaken || []).length;
+        wx.showModal({
+          title: '时段已被占用',
+          content: `${n} 个小时已经被其他客人订走，无法恢复。`,
+          showCancel: false,
+        });
+        return;
+      }
+      wx.showToast({ title: core.errText(err), icon: 'none' });
     });
-
-    if (clash.length) {
-      wx.showModal({
-        title: '时段已被占用',
-        content: `${clash.length} 个小时已经被其他客人订走，无法恢复。`,
-        showCancel: false,
-      });
-      return;
-    }
-
-    this.commit(core.setBookingStatus(id, core.PENDING), '已恢复为待确认', 'none');
   },
 
   goPricing() {

@@ -546,16 +546,47 @@ eq(od.data.list[0].canRestore, true, '可恢复');
 od.onRestore(ev({ id: bid }));
 eq(core.findBooking(bid).status, 'pending', '恢复为待确认');
 
-// 恢复时撞车应被拦下：先释放 19:00，让第二单占住，再试着恢复第一单
+/* ── 恢复撞车：守卫在服务端，页面只管把结果摆给老板看 ────────
+   这一段原来断的是「客户端自己查缓存、把恢复拦下来」。那段检查被搬进
+   updateBooking 的事务里了，因为客户端手上那份列表在两台手机上可以
+   同时是过期的 —— 两个管理员各拿一份过期的，可以把一单恢复到同一个
+   已经被占的格子上，「一格一单」当场就没了。
+
+   本地后端没有事务，所以【这个守卫在本地测不出来】，也不该假装测到了
+   （它在真云上，见 README 的真机验收第 5 条）。本地能测、也在这里测的是
+   orders.js 那一半：服务端回 slot-taken 之后，老板必须看到那个弹窗，
+   订单必须弹回已取消 —— 而不是留在界面上假装恢复成功。 */
 core.cancelBooking(bid);
 var b2 = sync(core.createBooking({
   dayIdx: DAY, groups: [{ ci: 0, court: '1号场', from: 1140, to: 1200 }],
   phone: '13900139000', name: '后来的人', note: '',
 }));
-eq(b2.ok, true, '第二单创建成功');
+eq(b2.ok, true, '第二单创建成功（占住刚释放的 19:00）');
+
 od.onShow();
+
+/* 临时换一个「update 必定被服务端拒掉」的后端。形状照抄 store.js 里
+   unwrapCloud 造出来的那个错：cloudReason 给 core 翻译成人话，
+   cloudTaken 给页面数有几格被占。 */
+var LB = storeMod._backends.localBackend;
+var clashBackend = Object.create(LB);
+clashBackend.update = function () {
+  var t = storeMod.makeTask();
+  var e = new Error('云函数返回 ok:false: slot-taken');
+  e.cloudReason = 'slot-taken';
+  e.cloudTaken = ['0|1140'];
+  t.settle(e);
+  return t;
+};
+
+log.length = 0;
+storeMod._useBackend(clashBackend);
 od.onRestore(ev({ id: bid }));
-eq(core.findBooking(bid).status, 'cancelled', '时段被占时恢复被拦下');
+storeMod._useBackend(LB);
+
+eq(core.findBooking(bid).status, 'cancelled', '服务端拒绝后订单弹回已取消（界面没骗老板）');
+ok(log.indexOf('modal: 时段已被占用') >= 0, '被拒绝时弹窗说明是哪些格子被占了');
+ok(log.indexOf('toast: 已恢复为待确认') < 0, '被拒绝时【不许】报恢复成功');
 
 /* ══════════════════════════════════════════════════ */
 console.log('\n── 改价页 pricing ───────────────────────────');
@@ -1196,21 +1227,167 @@ ct3.done(function () { ct3e = '不该走 done'; }).fail(function (e) { ct3e = e;
 failCloud(0, new Error('模拟断网'));
 ok(ct3e instanceof Error && /断网/.test(ct3e.message), '网络错误走 .fail', ct3e && ct3e.message);
 
-/* ⑦ 写方法打的是哪个云函数（名字最容易写错，各断言一次） */
+/* ⑦ 写方法打的是哪个云函数（名字最容易写错，各断言一次），
+      以及参数【放在哪个字段上】—— 云函数是按字段名读的，
+      放错了在本地一条都测不出来（本地后端根本收不到这些参数）。 */
 installCloudStub();
-CB.insert({ id: 'B1' });
-CB.update('B1', { status: 'confirmed' });
-CB.savePrices({});
-CB.replaceBookings([]);
+CB.insert({ id: 'B1' }, { slotPrices: { '0|1140': 90 }, gap: 60 });
+CB.update('B1', { status: 'confirmed' }, '8888');
+CB.savePrices({ set: { '2026-09-18|0|1140': 99 }, del: [] }, '8888');
+CB.clearAll('8888');
 eq(cloudCalls.map(function (c) { return c.name; }).join(','),
   'createBooking,updateBooking,savePrices,clearAll',
   '四个写方法各自打对了云函数');
+
+/* 订单对象【原样】进库，不掺运行时用的字段 —— 每格的价钱和时段粒度
+   分成另外两个字段走，服务端靠它们重算总价。 */
+eq(cloudCalls[0].data.booking.id, 'B1', 'insert 把订单包在 booking 字段里');
+eq(cloudCalls[0].data.booking.slotPrices, undefined, 'insert 不往订单对象里塞运行时字段');
+eq(cloudCalls[0].data.slotPrices['0|1140'], 90, 'insert 把每格价钱放在 slotPrices 上');
+eq(cloudCalls[0].data.gap, 60, 'insert 把时段粒度放在 gap 上');
+
 eq(cloudCalls[1].data.id, 'B1', 'update 把订单号放在 id 上');
 eq(cloudCalls[1].data.patch.status, 'confirmed', 'update 把改动放在 patch 上');
+
+/* ⚠️ 三个管理端方法必须带上口令。少传一个，云函数那边就是 forbidden，
+   而这条在本地是【静默】的：本地后端收下 passcode 参数然后扔掉。 */
+eq(cloudCalls[1].data.passcode, '8888', 'update 带上口令');
+eq(cloudCalls[2].data.set['2026-09-18|0|1140'], 99, 'savePrices 发的是被改动的那几格，不是整张表');
+eq(cloudCalls[2].data.passcode, '8888', 'savePrices 带上口令');
+eq(cloudCalls[3].data.passcode, '8888', 'clearAll 带上口令');
 
 /* ⑧ 切回本地后端，后面几条静态断言不依赖运行时状态 */
 storeMod._useBackend(storeMod._backends.localBackend);
 wx.cloud = realWxCloud;
+
+/* ── errText：失败怎么翻成人话 ────────────────────
+   orders.js / contact.js / pricing.js 的注释都写着「怎么翻由 errText
+   一处决定」，而失败提示是老板和客人唯一能看到的诊断信息。翻错了的
+   后果不是难看，是【让人做错事】：把「口令失效」说成「请重试」，
+   他会一直点；把「被抢了」说成「检查网络」，他会一直查网线。 */
+(function () {
+  function reason(r) { var e = new Error('x'); e.cloudReason = r; return e; }
+
+  eq(core.errText(reason('forbidden')),
+    '管理口令已失效，请退出管理页重新进入', '口令失效 → 别让人白试');
+  eq(core.errText(reason('slot-taken')),
+    '时段已被其他客人订走，无法恢复', '被抢了 → 说清楚是被抢了');
+  eq(core.errText(reason('busy')),
+    '同时提交的人较多，请再试一次', '重试耗尽 → 这条才是真该重试的');
+  eq(core.errText(reason('all-taken')),
+    '抱歉，你选的时段已不可预约', '全被占 → 客人能看懂');
+
+  /* 「状态未知」= 占用表不见了，不是网络问题。这句话要是被翻成
+     「请检查网络后重试」，客人会一直重试一件永远不成的事。 */
+  eq(core.errText(reason('state-unknown')),
+    '系统数据异常，请稍后再试或联系管理员', '状态未知 → 不许说成「检查网络」');
+
+  /* 认不出的原因（网络断了、云函数抛了）走 fallback——
+     fallback 是调用方给的，因为它才知道自己在干什么。 */
+  eq(core.errText(new Error('断网')), '操作失败，请检查网络后重试',
+    '认不出的错给默认那句');
+  eq(core.errText(new Error('断网'), '提交失败，请检查网络后重试'),
+    '提交失败，请检查网络后重试',
+    '调用方给了话就用调用方的（客人看到「提交失败」比「操作失败」清楚）');
+  /* ⚠️ 反过来也要成立：认得出的原因【压过】 fallback。
+     不然 contact.js 传一句「提交失败」，就会把「被抢了」盖成「网络问题」，
+     客人对着一个永远不成的事一直重试。 */
+  eq(core.errText(reason('slot-taken'), '提交失败，请检查网络后重试'),
+    '时段已被其他客人订走，无法恢复', '认得出的原因压过调用方的 fallback');
+  eq(core.errText(null), '操作失败，请检查网络后重试', '连 err 都没有也不崩');
+})();
+
+/* ── 外部数据进内存：形状在门口兜住 ────────────────
+   云函数回来的东西是【外部数据】—— 控制台里手改过一条、或者哪天云函数
+   改了形状，都可能塞进来一条缺胳膊少腿的记录。这一节盯的是：
+   一条坏记录不能让整张列表崩掉，而它崩起来的样子是【一屏空】，
+   没有任何线索能指向那一行。
+   （这不是假想：手工往控制台插调试记录时，就插出过只有 _id 的空记录。） */
+(function () {
+  var warns = [];
+  var realWarn = console.warn;
+  console.warn = function (m) { warns.push(String(m)); };
+
+  /* 格子 key 必须【现算】—— 测试里的基准日是 2026-09-14（周一），
+     写死日期的话断的就是另一格，而那种错会表现为「这条断言莫名其妙
+     一直是红的」。 */
+  function pk(dayIdx, ci, min) {
+    return core.toDateKey(core.DATES[dayIdx]) + '|' + ci + '|' + min;
+  }
+  var badPrices = {};
+  badPrices[pk(1, 0, 1140)] = 88;
+  badPrices[pk(1, 0, 1200)] = '90';
+  badPrices[pk(1, 0, 1260)] = 'abc';
+  badPrices[pk(1, 0, 1320)] = -5;
+
+  storeMod._useBackend(CB);
+  installCloudStub();
+  core.refresh(function () {});
+  arriveCloud(0, {
+    ok: true, isAdmin: true,
+    bookings: [
+      { id: 'Bgood1111', dateKey: '2026-09-19', items: [], slotKeys: [], status: 'pending' },
+      { dateKey: '2026-09-19', items: [], slotKeys: [], status: 'pending' },     // 没有 id
+      { id: 'Bnodate11', items: [], slotKeys: [], status: 'pending' },           // 没有 dateKey
+      { id: 'Bnumdate1', dateKey: 20260919, items: [], slotKeys: [], status: 'pending' },
+      null,
+    ],
+    prices: (function () {
+      var p = {};
+      p[pk(1, 0, 1140)] = 88;
+      p[pk(1, 0, 1200)] = '90';         // 字符串
+      p[pk(1, 0, 1260)] = 'abc';
+      p[pk(1, 0, 1320)] = -5;
+      return p;
+    })(),
+  });
+
+  /* ① 缺 id / 缺 dateKey 的记录用不了：取消/确认/恢复都按 id 找它，
+        按天查询按 dateKey 找它，排序也要拿它比 —— 留着只会在别处炸。
+        丢掉，而且必须【说出来】，不能静默丢数据。 */
+  eq(core.BOOKINGS.length, 1, '4 条坏记录全被丢掉，好的那条留着');
+  eq(core.BOOKINGS[0].id, 'Bgood1111', '留下的是那条完整的');
+  eq(warns.length, 1, '丢掉的时候说了出来（静默丢数据是这里最不该做的事）');
+
+  /* ② 缺 items / slotKeys 的补成空数组 —— 页面是【索引】进去取的
+        （toCard 里的 b.items[0]），不补的话老板页整页崩 */
+  warns.length = 0;
+  storeMod._useBackend(CB);
+  installCloudStub();
+  core.refresh(function () {});
+  arriveCloud(0, {
+    ok: true, isAdmin: true, prices: {},
+    bookings: [{ id: 'Bbare1111', dateKey: '2026-09-19', status: 'pending' }],
+  });
+  eq(Array.isArray(core.BOOKINGS[0].items), true, 'items 补成数组');
+  eq(Array.isArray(core.BOOKINGS[0].slotKeys), true, 'slotKeys 补成数组');
+  eq(warns.length, 0, '补字段不算丢数据，不该报警');
+
+  /* 老板页真的画得出来 —— 上面两条断言存在的理由就是这个：不崩 */
+  var odExt = loadPage('pages/orders/orders.js');
+  odExt.onShow();
+  eq(odExt.data.list.length, 1, '这种记录不会让老板页崩掉（卡片照常画出来）');
+  eq(odExt.data.list[0].timeText, '', '时段那栏是空的，而不是编一个出来');
+  odExt.onTapCard(ev({ id: 'Bbare1111' }));
+  ok(true, '点开它的详情也不崩（items 为空时那一行是空字符串）');
+
+  /* ③ 价格：只收【有限的数字】。spanPrice 是用 += 加总价的，
+        混进来一个字符串就变成字符串拼接 —— 客人看到天价，而每一格
+        显示得都好好的，页面上没有任何东西看起来是错的。 */
+  storeMod._useBackend(CB);
+  installCloudStub();
+  core.refresh(function () {});
+  arriveCloud(0, { ok: true, isAdmin: true, bookings: [], prices: badPrices });
+  eq(core.priceFor(1, 0, 1140), 88, '正常的数字收下');
+  eq(core.priceFor(1, 0, 1200) === '90', false, '字符串价格【没有】进内存');
+  eq(typeof core.priceFor(1, 0, 1200), 'number', '它退回规则价那个数字');
+  eq(core.priceFor(1, 0, 1320) < 0, false, '负数价格也没进内存');
+  eq(core.priceFor(1, 0, 1260) === 'abc', false, '连"abc"也没进来');
+
+  console.warn = realWarn;
+  storeMod._useBackend(storeMod._backends.localBackend);
+  wx.cloud = realWxCloud;
+})();
 
 /* ── 后端开关：只能靠读源码盯着 ────────────────────
    store.js 里那一行要是被谁改回 localBackend，整个项目会【静默退回单机版】：
@@ -1234,6 +1411,41 @@ wx.cloud = realWxCloud;
   ok(/ADMIN_WHITELIST/.test(src), '云函数里有白名单那个数组（补权限只需填它）');
   ok(/passcode\s*===\s*ADMIN_PASSCODE/.test(src),
     '口令是在云函数里比对的，不是客户端比完告诉它');
+})();
+
+/* ── 三份「逐字相同」的管理块 ──────────────────────
+   updateBooking / savePrices / clearAll 各有一份一模一样的鉴权代码
+   （云函数之间没法共享代码，只能复制，三处注释里都写了这句）。
+   复制的东西最怕的是【改一处漏两处】—— 而漏掉的那种漏法完全静默：
+   改口令时只改了一个，另外两个还是旧口令，管理端就开始随机报
+   「口令已失效」，看起来像网络问题。
+
+   所以这三份必须逐字相等。它们各自在文件里长得一模一样，只差
+   上下文，所以直接切片比对。 */
+(function () {
+  function adminBlock(path) {
+    var src = readFile(ROOT + '../cloudfunctions/' + path);
+    var i = src.indexOf('const ADMIN_PASSCODE');
+    if (i < 0) return null;
+    var j = src.indexOf('\n}\n', src.indexOf('function isAdmin', i));
+    return j < 0 ? null : src.slice(i, j + 3);
+  }
+
+  var files = ['updateBooking/index.js', 'savePrices/index.js', 'clearAll/index.js'];
+  var blocks = files.map(adminBlock);
+  ok(blocks.every(function (b) { return !!b; }), '三个云函数里都找得到那块鉴权代码',
+    blocks.map(function (b) { return b ? b.length : null; }));
+
+  eq(blocks[1] === blocks[0], true, 'savePrices 那份和 updateBooking 逐字相同');
+  eq(blocks[2] === blocks[0], true, 'clearAll 那份和 updateBooking 逐字相同');
+
+  /* 白名单那一行必须是【恰好】这个样子：getSchedule 的本地台架
+     （dev/get-schedule）就是靠替换这个字符串来测「白名单非空时口令失效」
+     的，格式一变它就会抛「白名单那行没被替换掉 —— 源码形状变了」。 */
+  ok(/\nconst ADMIN_WHITELIST = \[\];\n/.test(blocks[0] || ''),
+    'ADMIN_WHITELIST 那行是空的、且格式没变（补权限只需填它）');
+  ok(/ADMIN_WHITELIST\.length[\s\S]*indexOf\(openid\)/.test(blocks[0] || ''),
+    '白名单优先：填了名单之后口令那条路就【完全】不走了');
 })();
 
 /* ── 口令只在真解锁之后才发出去 ────────────────────
