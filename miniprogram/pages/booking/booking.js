@@ -22,29 +22,51 @@ Page({
 
   onLoad() {
     this.sel = new Set();
-    this.renderDates();
-    this.buildGrid();
+    this.repaint();      // 本地镜像先上屏，第一屏不用等网络
+    this.refresh();      // 再去拉权威数据
   },
 
   onShow() {
-    // 回到本页时重新算日期（可能跨天了），并刷新网格
+    // 回到本页时重新算日期（可能跨天了）
     // （管理端可能刚改过价格或确认过预约）
     core.refreshDates();
+    this.repaint();
+    this.refresh();
+  },
 
-    // 今天可能已经过完了（比如晚上才打开），或者跨天了。
-    // 这时别让客人对着一屏灰格子发愣，直接挪到最近一个还能约的日期。
-    if (!this.dayHasFree(this.data.currentDay)) {
-      this.sel.clear();                 // 换了日期，选中的格子作废
-      this.setData({ currentDay: this.firstFreeDay() });
-    }
+  /* ── 两段式：repaint 只画缓存，refresh 取数后再画 ──────
+     这么分是为了接云开发：那时数据在网络上，回来得晚。
+     repaint —— 把手上这份（本地镜像 / 上次拉到的）先画上屏，界面立刻有内容
+     refresh —— 取一次权威数据，回来在 done 里再 repaint
 
-    /* 不清空选择 —— 客人可能刚从填写页返回，正想接着改。
-       但中间可能有人把时段订走了，所以把不再可约的挑掉，
-       而不是一刀切清空。 */
-    this.pruneSel();
-
+     ⚠️ 凡是【依赖最新占用情况】的判断，都必须写在 refresh 的 done 里。
+        写在 core.refresh() 的下一行，本地能跑（本地后端是同步的），
+        云端会拿旧数据算 —— 而且本地测不出来。 */
+  repaint() {
     this.renderDates();
     this.buildGrid();
+    /* 底栏也要重算：pruneSel 会把被订走的格子剔掉，
+       不重算的话合计还是剔除前的数字。 */
+    this.updateFooter();
+  },
+
+  refresh(cb) {
+    core.refresh(() => {
+      /* 今天可能已经过完了（比如晚上才打开），或者跨天了。
+         这时别让客人对着一屏灰格子发愣，直接挪到最近一个还能约的日期。 */
+      if (!this.dayHasFree(this.data.currentDay)) {
+        this.sel.clear();               // 换了日期，选中的格子作废
+        this.setData({ currentDay: this.firstFreeDay() });
+      }
+
+      /* 不清空选择 —— 客人可能刚从填写页返回，正想接着改。
+         但中间可能有人把时段订走了，所以把不再可约的挑掉，
+         而不是一刀切清空。 */
+      this.pruneSel();
+
+      this.repaint();
+      if (cb) cb();
+    });
   },
 
   /* ── 可用性探测 ─────────────────────────────────── */
@@ -83,11 +105,7 @@ Page({
     const idx = +e.currentTarget.dataset.idx;
     if (idx === this.data.currentDay) return;
     this.sel.clear();          // 一次预约只针对一天
-    this.setData({ currentDay: idx }, () => {
-      this.renderDates();
-      this.buildGrid();
-      this.updateFooter();
-    });
+    this.setData({ currentDay: idx }, () => this.repaint());
   },
 
   /* ── 网格 ───────────────────────────────────────── */

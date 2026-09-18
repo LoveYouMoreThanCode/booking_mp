@@ -9,17 +9,22 @@ Page({
   },
 
   onShow() {
-    core.refreshDates();
-    this.render();
+    this.repaint();      // 本地镜像先上屏，老板一眼就看到单子
+    this.refresh();      // 再去拉权威数据（别的店员可能刚改过）
   },
 
   onPullDownRefresh() {
-    this.render();
-    wx.stopPullDownRefresh();
+    /* 转圈要转到数据真回来为止。立刻 stopPullDownRefresh 的话，
+       云端的转圈会在列表刷新之前就消失 —— 老板看到的是「下拉了、没反应」。 */
+    this.repaint();
+    this.refresh(() => wx.stopPullDownRefresh());
   },
 
-  /* ── 渲染 ───────────────────────────────────────── */
-  render() {
+  /* ── 两段式：repaint 只画缓存，refresh 取数后再画 ──────
+     分法和 booking.js 一样。本页的渲染全部只读内存缓存，
+     没有任何「依赖最新数据」的判断，所以 refresh 的 done 里
+     除了重画没别的事。 */
+  repaint() {
     const active = this.data.active;
 
     const tabs = [core.PENDING, core.CONFIRMED, core.CANCELLED].map(k => ({
@@ -32,6 +37,13 @@ Page({
     const list = core.bookingsByStatus(active).map(b => this.toCard(b));
 
     this.setData({ tabs, list, empty: list.length === 0 });
+  },
+
+  refresh(cb) {
+    core.refresh(() => {
+      this.repaint();
+      if (cb) cb();
+    });
   },
 
   /** 订单 → 卡片视图模型。把格式化逻辑集中在这里，WXML 里只做取值。 */
@@ -77,7 +89,7 @@ Page({
   onTapTab(e) {
     const key = e.currentTarget.dataset.key;
     if (key === this.data.active) return;
-    this.setData({ active: key }, () => this.render());
+    this.setData({ active: key }, () => this.repaint());
   },
 
   /* 四个改状态的入口（卡片里的确认 / 列表上的确认 / 取消 / 恢复）
@@ -88,13 +100,13 @@ Page({
     /* 订单可能已经不在内存里了（列表刷过一轮、数据被清空过）。
        这时 core 返回 null 而不是 task —— 什么都不做、重画一次就好：
        界面会显示真实情况，不该报一个假的成功，也不该崩在这一行。 */
-    if (!t) { this.render(); return; }
+    if (!t) { this.repaint(); return; }
 
     t.done(() => {
-      this.render();
+      this.repaint();
       wx.showToast({ title: okText, icon: icon || 'success' });
     }).fail(() => {
-      this.render();
+      this.repaint();
       wx.showToast({ title: '操作失败，请检查网络后重试', icon: 'none' });
     });
   },

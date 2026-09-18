@@ -848,6 +848,90 @@ ok(log.indexOf('toast: 已确认') < 0, '订单不存在时不报假的成功');
 eq(odF.data.list.length, 0, '订单不存在时列表照常重画（没崩）');
 
 /* ══════════════════════════════════════════════════ */
+console.log('\n── 两段式：缓存先渲染，数据回来再刷新 ──────');
+/* 上面的用例全都跑在同步的本地后端上，「取数前」和「取数后」是同一个瞬间，
+   所以【分不出】页面有没有把该等数据的判断放进 done 里 —— 这也正是这类
+   错误在本地测不出来、上云才炸的原因。
+
+   这一节专门造一个【延迟返回】的后端（task 挂起，由测试手动 settle），
+   把两段硬拆开看：
+     ① 数据还没回来时，界面必须已经有内容（画的是本地缓存）
+     ② 依赖最新占用情况的判断（pruneSel / dayHasFree）必须等到数据回来
+        之后才发生 —— 写成 core.refresh() 的下一行就会在这里变红
+
+   这是这一步唯一能在本地被证伪的东西，所以单独关起来测。 */
+
+var storeMod = loadModule('utils/store.js').exports;
+var realFetchAll = storeMod.fetchAll;
+
+/** 把「服务器」按住不动：所有取数都挂起，直到 arrive() 手动放行 */
+function holdServer() {
+  var t = storeMod.makeTask();
+  storeMod.fetchAll = function () { return t; };
+  return {
+    arrive: function (payload) {
+      storeMod.fetchAll = realFetchAll;
+      t.settle(null, payload);
+    },
+  };
+}
+
+/* 「服务器上」的样子：19:00 已经被别人订走。
+   直接写一条订单字面量，不经过 core —— 这样它才是【缓存里没有】的，
+   也就是客人离开这一页期间新发生的事。 */
+var bookedByOther = {
+  id: 'Bother', createdAt: 0, updatedAt: 0,
+  dateKey: core.toDateKey(core.DATES[DAY]),
+  items: [{ ci: 0, court: '1号场', from: 1140, to: 1200, price: 90 }],
+  slotKeys: ['0|1140'],
+  phone: '13500135000', name: '别人', note: '',
+  total: 90, status: 'pending', reply: '',
+};
+
+core.clearAllData();                       // 缓存空了：19:00 在缓存里是空的
+var bkS = loadPage('pages/booking/booking.js');
+bkS.onLoad();
+bkS.onTapDate(ev({ idx: DAY }));
+bkS.sel.clear();
+bkS.onTapCell(ev(T19));
+eq(bkS.sel.size, 1, '客人选中了 19:00');
+eq(bkS.data.gridRows[11].courts[0].cls, 'cell selected', '缓存里它是可约的、选中的');
+
+var held = holdServer();
+bkS.onShow();                              // 回到本页：先 repaint，再 refresh（被按住）
+
+eq(bkS.data.gridRows.length, 14, '① 数据还没回来，界面已经有内容（画的是本地缓存）');
+/* ② 盯的不是「有没有等数据」（那由 ③ 盯，它才是这一节的重点），
+   而是【重回本页不许一刀切清空选择】—— 客人可能刚从填写页返回、正想接着改。
+   实测过：把 holdServer 换成不按住，② 照样是绿的，所以它抓不到抢跑。 */
+eq(bkS.sel.size, 1, '② 数据还没回来时选择原样留着（不许一刀切清空）');
+eq(bkS.data.gridRows[11].courts[0].cls, 'cell selected', '② 缓存里它仍是选中的');
+
+held.arrive({ bookings: [bookedByOther], prices: {} });   // 数据回来了
+
+eq(bkS.sel.size, 0, '③ 数据回来后，把已被别人订走的 19:00 剔掉');
+eq(bkS.data.gridRows[11].courts[0].cls, 'cell pending', '③ 格子变成「待」');
+eq(bkS.data.gridRows[11].courts[0].text, '待', '③ 格子文案也更新了');
+eq(bkS.data.hasSelection, false, '③ 底栏合计跟着清掉 —— repaint 里带了 updateFooter');
+
+/* orders 页的同类问题：下拉转圈必须转到数据真回来 */
+core.clearAllData();
+var spins = 0;
+var realStop = wx.stopPullDownRefresh;
+wx.stopPullDownRefresh = function () { spins++; };
+
+var held2 = holdServer();
+var odS = loadPage('pages/orders/orders.js');
+odS.onPullDownRefresh();
+eq(spins, 0, '④ 数据没回来时转圈不停（立刻停的话老板会以为下拉没反应）');
+
+held2.arrive({ bookings: [], prices: {} });
+eq(spins, 1, '④ 数据回来后才停转圈');
+
+wx.stopPullDownRefresh = realStop;
+core.clearAllData();
+
+/* ══════════════════════════════════════════════════ */
 console.log('\n── 输入框的静态约定 ────────────────────────');
 /* 下面几条只有在真机上才看得出后果，桩件测不到，所以直接查源码文本。
    删掉它们不会让任何一条功能断言变红，只会让真机上的输入框重新变瞎。

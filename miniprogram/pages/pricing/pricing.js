@@ -23,15 +23,24 @@ Page({
 
   onLoad() {
     this.sel = new Set();
-    this.renderDates();
-    this.buildGrid();
+    this.repaint();      // 本地镜像先上屏
+    this.refresh();      // 再去拉权威价格
   },
 
   onShow() {
-    core.refreshDates();
-    this.sel.clear();
+    core.refreshDates();   // 可能跨天了，日期表是本地算的，同步
+    this.sel.clear();      // 换了日期/重回本页，选中的格子作废
+    this.repaint();
+    this.refresh();
+  },
+
+  /* ── 两段式：repaint 只画缓存，refresh 取数后再画 ──────
+     分法和 booking.js 一样。本页的价格全部从内存缓存读，
+     refresh 的 done 里除了重画没别的事。 */
+  repaint() {
     this.renderDates();
     this.buildGrid();
+    this.updateToolbar();
   },
 
   /* ── 日期条 ─────────────────────────────────────── */
@@ -50,11 +59,7 @@ Page({
     const idx = +e.currentTarget.dataset.idx;
     if (idx === this.data.currentDay) return;
     this.sel.clear();
-    this.setData({ currentDay: idx }, () => {
-      this.renderDates();
-      this.buildGrid();
-      this.updateToolbar();
-    });
+    this.setData({ currentDay: idx }, () => this.repaint());
   },
 
   /* ── 网格 ───────────────────────────────────────── */
@@ -124,10 +129,11 @@ Page({
     this.repaint();
   },
 
-  /** 重画整表 + 工具条。格子多但只在点击后跑一次，够用。 */
-  repaint() {
-    this.buildGrid();
-    this.updateToolbar();
+  refresh(cb) {
+    core.refresh(() => {
+      this.repaint();
+      if (cb) cb();
+    });
   },
 
   updateToolbar() {
@@ -170,8 +176,14 @@ Page({
         wx.showToast({ title: `已改 ${n} 个时段`, icon: 'none' });
       })
       .fail(() => {
-        this.repaint();
+        /* 内存已经回滚了，但云端可能还有别人同时改过价（或者这次写
+           只成功了一半）。拉一次权威值 —— 别让老板对着一个他自己
+           以为的价格继续改。
+
+           ⚠️ 只在【失败】时才 refresh。成功之后立刻 refresh 会和这次
+              写入抢：云端把改之前的值又刷回来，看着像「改价没生效」。 */
         wx.showToast({ title: '改价失败，请检查网络后重试', icon: 'none' });
+        this.refresh();
       });
   },
 
@@ -190,8 +202,8 @@ Page({
         wx.showToast({ title: `已恢复 ${n} 个时段`, icon: 'none' });
       })
       .fail(() => {
-        this.repaint();
         wx.showToast({ title: '恢复失败，请检查网络后重试', icon: 'none' });
+        this.refresh();          // 同上：拉回权威值
       });
   },
 
@@ -213,8 +225,8 @@ Page({
             wx.showToast({ title: '已清空', icon: 'none' });
           })
           .fail(() => {
-            this.repaint();
             wx.showToast({ title: '清空失败，请检查网络后重试', icon: 'none' });
+            this.refresh();        // 同上：拉回权威值
           });
       },
     });
