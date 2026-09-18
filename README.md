@@ -1,11 +1,18 @@
 # 羽毛球场地预约小程序
 
 ```
-miniprogram/  小程序工程（用微信开发者工具打开这个目录）—— 只改这里
-test/         冒烟测试，不需要 node 也不需要开发者工具
-prototype/    最早的 HTML 原型，已停更，只作存档（见文末）
-PREPARATION.md 上线前的准备清单：注册、备案、类目、合规
+project.config.json  开发者工具【导入这一层】—— 它用下面两个 root 指路
+miniprogram/         小程序代码（前端），日常改的就是这里
+cloudfunctions/      云函数（跑在云端的 Node，不打包进小程序）
+test/                冒烟测试，不需要 node 也不需要开发者工具
+prototype/           最早的 HTML 原型，已停更，只作存档（见文末）
+PREPARATION.md       上线前的准备清单：注册、备案、类目、合规
 ```
+
+> ⚠️ **云函数不能放在 `miniprogram/` 里面。** 放在里面工具就不会把它当云函数，
+> 右键没有「上传并部署」。这两个目录必须**平级**，靠 `project.config.json` 里的
+> `miniprogramRoot` / `cloudfunctionRoot` 分开指 —— 这也是为什么导入要选仓库根目录
+> 而不是 `miniprogram/`。
 
 ---
 
@@ -34,11 +41,11 @@ PREPARATION.md 上线前的准备清单：注册、备案、类目、合规
 
 | 字段 | 填什么 |
 |---|---|
-| 目录 | 选到本仓库的 `miniprogram/` 这一层 |
+| 目录 | 选到**本仓库的根目录**（不是 `miniprogram/`，云函数要一起被认出来） |
 | AppID | 上一步抄下来的 |
-| 后端服务 | 选「不使用云服务」（等要接云开发时再改） |
+| 后端服务 | 选「微信云开发」 |
 
-AppID 已经写在 `miniprogram/project.config.json` 里（`wx14e71fb5acddc8c6`），
+AppID 已经写在根目录的 `project.config.json` 里（`wx14e71fb5acddc8c6`），
 导入时工具会自动读到，不用手填。换小程序时改这一行即可。
 
 ### 4. 预览

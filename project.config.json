@@ -1,5 +1,7 @@
 {
   "description": "羽毛球场地预约小程序",
+  "miniprogramRoot": "miniprogram/",
+  "cloudfunctionRoot": "cloudfunctions/",
   "packOptions": {
     "ignore": [],
     "include": []

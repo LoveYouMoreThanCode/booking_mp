@@ -1,0 +1,9 @@
+{
+  "name": "concurrencyCheck",
+  "version": "1.0.0",
+  "description": "临时体检函数（第 0 步）：量「两个事务写同一个已存在的文档会不会冲突」。验完删掉。",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}
