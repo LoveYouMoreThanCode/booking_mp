@@ -262,6 +262,16 @@ eq(core.DATES.length, 7, '未来 7 天');
 
 var storeMod = loadModule('utils/store.js').exports;
 
+/* ⚠️ 出货配置是 cloudBackend，但【这一整套断言跑本地后端】。
+   原因是硬的：云端后端异步 settle，而这里几百条断言是同步写的
+   （靠的就是「本地后端在 .done() 注册的那一刻同步回调」）。
+   不切的话，下面每个 store.* 都会去打 wx.cloud —— 而桩件里没有它。
+
+   所以「出货用的到底是哪个后端」由末尾那条【静态断言】直接读源码盯着，
+   不由这里的行为断言盯着。那两种失败模式不一样：行为断言能发现
+   本地后端坏了，发现不了开关被人改回 localBackend。 */
+storeMod._useBackend(storeMod._backends.localBackend);
+
 function demoBookings() {
   var now = Date.now();                     // 测试里的 Date 是桩件，可控
   var H = function (h) { return h * 60; };
@@ -1080,6 +1090,164 @@ function wxmlSource(rel) {
   var src = readFile(ROOT + 'app.js');
   ok(!/seedDemoBookings\s*\(/.test(src), 'app.js 不再自动灌演示数据');
   ok(!/SEED_FLAG/.test(src), 'app.js 里没有「本机已灌过」的标记');
+})();
+
+/* ══════════════════════════════════════════════════ */
+console.log('\n── 云端后端：调用名、参数、镜像回写 ────────');
+/* 上面所有断言都跑在本地后端上，云端后端一行都没被执行过。
+   ⚠️ 这里【验不到】云函数本身（wx-server-sdk 在本地跑不起来，jsc 里
+      也没有云数据库）—— 云函数里的逻辑只能靠真机验。这一节能验的是
+      【客户端这一侧】的接线：打对了函数名没有、参数传对没有、异步契约
+      守没守住、镜像有没有回写。
+
+   桩件返回一个【可控的 thenable】：.then/.catch 只把回调存起来，
+   什么时候放行由测试说了算。这样「放行之前必须什么都没 settle」
+   这条（云端后端之所以是云端后端）在本地是真能被断言的 —— 而不是拿
+   同步假象糊过去。 */
+var CB = storeMod._backends.cloudBackend;
+var cloudCalls = [];
+var realWxCloud = wx.cloud;
+
+function installCloudStub() {
+  cloudCalls = [];
+  wx.cloud = {
+    callFunction: function (o) {
+      var rec = { name: o.name, data: o.data, done: null, err: null };
+      cloudCalls.push(rec);
+      return {
+        then: function (fn) {
+          rec.done = fn;
+          return { catch: function (fn2) { rec.err = fn2; } };
+        },
+      };
+    },
+  };
+}
+
+/** 放行第 i 次云调用（形状照抄 wx.cloud.callFunction 的 resolve 值） */
+function arriveCloud(i, result) {
+  cloudCalls[i].done({ result: result, errMsg: 'cloud.callFunction:ok' });
+}
+/** 让第 i 次云调用失败（网络断了 / 云函数抛了） */
+function failCloud(i, err) { cloudCalls[i].err(err); }
+
+storeMod._useBackend(CB);
+installCloudStub();
+
+/* ① 打的是哪个云函数、参数对不对 */
+var ct1 = CB.fetchAll({ dateKeys: ['2026-09-18', '2026-09-19'], passcode: '8888' });
+eq(cloudCalls.length, 1, 'fetchAll 发起了一次云调用');
+eq(cloudCalls[0].name, 'getSchedule',
+  'fetchAll 打的是 getSchedule（不是 listBookings 之类）');
+eq(cloudCalls[0].data.dateKeys.length, 2, '日期原样传给了云函数');
+eq(cloudCalls[0].data.passcode, '8888', '口令原样传给了云函数');
+
+/* ② 网络没回来之前，一个回调都不许触发 —— 这条就是「云端后端是异步的」 */
+var ct1v = null, ct1e = null;
+ct1.done(function (v) { ct1v = v; }).fail(function (e) { ct1e = e; });
+eq(ct1v === null && ct1e === null, true,
+  '网络还没回来，task 不许 settle（云端后端必须是异步的）');
+
+/* ③ 放行：结果要映射成 { bookings, prices }，并且【写回本地镜像】 */
+var cloudBookings = [{ dateKey: '2026-09-18', slotKeys: ['0|1140'], status: 'pending' }];
+var cloudPrices = { '2026-09-18|0|1140': 88 };
+arriveCloud(0, { ok: true, isAdmin: false, bookings: cloudBookings, prices: cloudPrices });
+eq(ct1v !== null, true, '放行之后才 settle');
+eq(ct1v && ct1v.bookings.length, 1, 'bookings 从 result 里取出来了');
+
+var mirrored = storeMod.readCache();
+eq(mirrored.bookings.length, 1, 'fetchAll 成功后把订单写回了本地镜像（冷启动第一屏靠它）');
+eq(mirrored.prices['2026-09-18|0|1140'], 88, '价格也写回了镜像');
+eq(mirrored.bookings[0].phone, undefined,
+  '非管理员的订单里没有 phone —— 投影是云函数做的，客户端不会自己补字段');
+
+/* ④ 云函数回 ok:false（参数不合法之类）：走 .fail，不是 .done */
+installCloudStub();
+var ct2 = CB.fetchAll({ dateKeys: [] });
+var ct2v = null, ct2e = null;
+ct2.done(function (v) { ct2v = v; }).fail(function (e) { ct2e = e; });
+arriveCloud(1 - 1, { ok: false, reason: 'no-dates' });
+eq(ct2v === null, true, 'ok:false 不许走 .done（那不是成功）');
+ok(!!ct2e && /no-dates/.test(ct2e.message), 'ok:false 变成一次带原因的失败', ct2e && ct2e.message);
+
+/* ④b detail（云函数给的可读原因）要跟着进错误消息。
+   搭起来时最常撞的是「集合忘了建」，而那时候界面上是一片空 —— 跟
+   「还没人下单」长得一模一样。detail 是唯一能把它俩分开的东西，
+   它必须能一路走到 console.warn 看得见的地方。 */
+installCloudStub();
+var ct2b = CB.fetchAll({ dateKeys: ['2026-09-18'] });
+var ct2bErr = null;
+ct2b.fail(function (e) { ct2bErr = e; });
+arriveCloud(0, { ok: false, reason: 'read-failed', detail: 'prices: collection not exists' });
+ok(!!ct2bErr && /prices/.test(ct2bErr.message),
+  '云函数的 detail 被带进了错误消息（不然只看到一句「取数失败」）', ct2bErr && ct2bErr.message);
+eq(ct2bErr && ct2bErr.cloudReason, 'read-failed', 'reason 单独挂在 cloudReason 上，好判类型');
+eq(ct2bErr && ct2bErr.cloudDetail, 'prices: collection not exists', 'detail 原样挂在 cloudDetail 上');
+
+/* ⑤ 失败时【不清镜像】—— 宁可用旧数据，也别把界面清空 */
+var stillThere = storeMod.readCache();
+eq(stillThere.bookings.length, 1, '取数失败后本地镜像还在（没被清空）');
+
+/* ⑥ 网络错误：也走 .fail */
+installCloudStub();
+var ct3 = CB.fetchAll({ dateKeys: ['2026-09-18'] });
+var ct3e = null;
+ct3.done(function () { ct3e = '不该走 done'; }).fail(function (e) { ct3e = e; });
+failCloud(0, new Error('模拟断网'));
+ok(ct3e instanceof Error && /断网/.test(ct3e.message), '网络错误走 .fail', ct3e && ct3e.message);
+
+/* ⑦ 写方法打的是哪个云函数（名字最容易写错，各断言一次） */
+installCloudStub();
+CB.insert({ id: 'B1' });
+CB.update('B1', { status: 'confirmed' });
+CB.savePrices({});
+CB.replaceBookings([]);
+eq(cloudCalls.map(function (c) { return c.name; }).join(','),
+  'createBooking,updateBooking,savePrices,clearAll',
+  '四个写方法各自打对了云函数');
+eq(cloudCalls[1].data.id, 'B1', 'update 把订单号放在 id 上');
+eq(cloudCalls[1].data.patch.status, 'confirmed', 'update 把改动放在 patch 上');
+
+/* ⑧ 切回本地后端，后面几条静态断言不依赖运行时状态 */
+storeMod._useBackend(storeMod._backends.localBackend);
+wx.cloud = realWxCloud;
+
+/* ── 后端开关：只能靠读源码盯着 ────────────────────
+   store.js 里那一行要是被谁改回 localBackend，整个项目会【静默退回单机版】：
+   功能看着一切正常，只是客人的订单老板永远收不到。上面那些行为断言
+   一条都发现不了 —— 它们测的是两个后端各自好不好使，不是出货用的是哪个。 */
+(function () {
+  var src = readFile(ROOT + 'utils/store.js');
+  var m = src.match(/^[ \t]*(?:let|const)[ \t]+backend[ \t]*=[ \t]*([A-Za-z_$][\w$]*)/m);
+  ok(!!m, 'store.js 里有后端开关那一行');
+  eq(m && m[1], 'cloudBackend',
+    '后端开关指向 cloudBackend（改回 localBackend = 静默退回单机版）');
+})();
+
+/* ── 管理身份只能由云函数自己算出来 ────────────────
+   客户端传的只有口令本身。要是哪天有人图省事加一句 event.admin，
+   那就等于让调用方自己宣布「我是管理员」—— 任何人反编译后都能这么宣布。
+   这条断言盯着云函数源码，客户端那一侧则在 core.js 里盯着（见下）。 */
+(function () {
+  var src = readFile(ROOT + '../cloudfunctions/getSchedule/index.js');
+  ok(!/event\.admin/.test(src), '云函数不读 event.admin（身份不能由调用方自报）');
+  ok(/ADMIN_WHITELIST/.test(src), '云函数里有白名单那个数组（补权限只需填它）');
+  ok(/passcode\s*===\s*ADMIN_PASSCODE/.test(src),
+    '口令是在云函数里比对的，不是客户端比完告诉它');
+})();
+
+/* ── 口令只在真解锁之后才发出去 ────────────────────
+   要是无脑带上 CONFIG.adminPasscode，那么每个客人的手机都会拿着口令去问，
+   云函数那边「非管理员只拿投影」就永远不生效 —— 等于把所有人的手机号
+   发给所有人。这个错误在界面上完全看不出来（管理员自己用着一切正常）。 */
+(function () {
+  var src = readFile(ROOT + 'utils/core.js');
+  ok(/adminUnlocked/.test(src),
+    'core 取口令时会看 adminUnlocked（没解锁就不带口令）');
+  var i = src.indexOf('function adminPasscode');
+  ok(i >= 0, 'core.js 里有 adminPasscode()');
+  var body = i < 0 ? '' : src.slice(i, i + 400);
+  ok(/adminUnlocked/.test(body), 'adminPasscode() 确实是在看那个标记');
 })();
 
 /* ══════════════════════════════════════════════════ */

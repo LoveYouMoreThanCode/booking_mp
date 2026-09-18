@@ -1,0 +1,9 @@
+{
+  "name": "getSchedule",
+  "version": "1.0.0",
+  "description": "只读取数：按日期拉订单和价格，按身份决定给不给手机号",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}

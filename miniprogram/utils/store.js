@@ -4,9 +4,9 @@
    这一层【不持有任何内存数据】，只是传输：读本地镜像、往本地/远端写。
    业务逻辑和页面读的一律是 core.js 里的内存缓存，不是这里。
 
-   ── 换云开发只改一行 ──────────────────────────────────────────
-     const backend = localBackend;    →    const backend = cloudBackend;
-   下面有一个写好注释的 cloudBackend 草稿，页面一行都不用动。
+   ── 后端可换，开关在文件下半部分 ────────────────────────────
+     const backend = cloudBackend;    ← 出货配置（本地后端只在测试里用）
+   两个后端实现同一个接口，页面和 core.js 一行都不用动。
 
    ── task 契约（页面必须遵守）────────────────────────────────
    每个查询返回一个小对象，有 .done(fn) / .fail(fn)：
@@ -180,39 +180,126 @@ const localBackend = {
   },
 };
 
-/* ── 云端后端（还没写，接口形状先摆在这儿）─────────────────
-   写它的时候唯一要注意的：这些方法必须【异步】settle，
-   也就是在网络回来之后再调 t.settle()。页面代码不用改，
-   因为页面已经写成「事情放在 done 里」了。
+/* ── 云端后端 ────────────────────────────────────────────
+   和本地后端的唯一区别：这些方法【异步】settle —— 网络回来才交付。
+   页面代码一行都不用改，因为它们早就写成「事情放在 done 里」了。
 
-const cloudBackend = {
-  fetchAll()         { return callCloud('listBookings'); },
-  insert(b)          { return callCloud('createBooking', b); },
-  update(id, patch)  { return callCloud('updateBooking', { id, patch }); },
-  replaceBookings(l) { return callCloud('replaceBookings', l); },
-  savePrices(map)    { return callCloud('savePrices', map); },
-};
+   每个方法对应一个云函数（名字写在下面，别改错：
+   insert 打的是 createBooking，不是 insertBooking）。 */
 
-   callCloud 长这样（到时候再加）：
-
+/**
+ * 把 wx.cloud 的 Promise 适配成 task。
+ *
+ * ⚠️ 这是全项目【唯一】碰 Promise 的地方，而且 Promise 到这儿为止 ——
+ *    它绝不会漏进 core.js 或页面。原因见文件顶部：测试跑在 jsc 上，
+ *    未处理的 Promise 拒绝在那里是「静默 exit 0」，断言失败会变成
+ *    「假装通过」。这里 .then / .catch 两条路都通到 t.settle，没有第三种。
+ */
 function callCloud(name, data) {
   const t = makeTask();
   wx.cloud.callFunction({ name, data })
-    .then(r => t.settle(null, r.result))
+    .then(r => t.settle(null, r && r.result))
     .catch(e => t.settle(e));
-  return t;          // ← 注意：这里是异步 settle，页面照样只管在 done 里做事
+  return t;
 }
-   ──────────────────────────────────────────────────────── */
 
-const backend = localBackend;   // ← 接云开发时只改这一行
+/* 云函数用 ok:false 表达「我跑通了，但这事办不成」（比如日期参数不合法）。
+   那不是网络错误，但也不能当成成功往下走 —— 统一在这儿变成一次失败，
+   免得每个调用方都自己判一遍。 */
+function unwrapCloud(res) {
+  if (res && res.ok) return null;          // ← 成功必须是 null，调用方靠真假判
+  const reason = (res && res.reason) || 'unknown';
+  /* detail 是云函数给的可读原因（比如「哪张集合读不到」）。
+     它只进控制台，不进界面 —— 这些是搭建期的错，给开发看的，
+     客人看了也没用。失败时 core 那条 console.warn 会把它带出来。 */
+  const detail = (res && res.detail) || '';
+  const e = new Error('云函数返回 ok:false: ' + reason + (detail ? ' —— ' + detail : ''));
+  e.cloudReason = reason;
+  e.cloudDetail = detail;
+  return e;
+}
+
+const cloudBackend = {
+  /**
+   * 取数。opts = { dateKeys: [...], passcode: '' }
+   *
+   * ⚠️ 成功之后要把结果【写回本地 storage】—— 这是「两段式」在云端
+   *    真正兑现的地方：下次冷启动时 readCache() 读到的就是这一次的快照，
+   *    第一屏立刻有内容，不用等网络。
+   *
+   * ⚠️ 失败时【不写镜像】。宁可留着上一次的，也别用一份空的盖掉它。
+   */
+  fetchAll(opts) {
+    const out = makeTask();
+    callCloud('getSchedule', opts || {})
+      .done(res => {
+        const bad = unwrapCloud(res);
+        if (bad) { out.settle(bad); return; }
+        const bookings = res.bookings || [];
+        const prices = res.prices || {};
+
+        /* ⚠️ 临时的（第 3 步删）。接云这一段里，「成功但结果不对」和
+           「压根没成功」在界面上长得一模一样 —— 都是一屏空。失败那边
+           有 core.js 的 console.warn 兜着，成功这边原来一个字都不打，
+           于是「回 ok:true 但 0 条」这种最像偶发的错完全无声。
+           把【问了什么、回来什么】打出来，这一整类问题就不用猜了。 */
+        if (typeof console !== 'undefined' && console.info) {
+          console.info('[getSchedule] 问了 ' + ((opts && opts.dateKeys) || []).join(' ')
+            + ' → 回来 ' + bookings.length + ' 单 / ' + Object.keys(prices).length + ' 个改价'
+            + ' / isAdmin=' + (res.isAdmin === true)
+            /* anyBookings 只在「一条都没查到」时才有值（云函数那边有说明）。
+               true = 记录在库里但日期对不上；false = 库里压根没有单。 */
+            + (res.anyBookings === null || res.anyBookings === undefined
+                ? '' : ' / 库里有没有单=' + res.anyBookings)
+            + (res.shape ? ' / 那条长这样=' + JSON.stringify(res.shape) : ''));
+        }
+
+        try {
+          wx.setStorageSync(STORE_KEY, bookings);
+          wx.setStorageSync(PRICE_KEY, prices);
+        } catch (e) {
+          /* 镜像写不进去（存储满了之类）不该让这次取数失败 ——
+             数据已经在手上，页面照样能画。下次冷启动才会没东西可读。 */
+        }
+        out.settle(null, { bookings, prices });
+      })
+      .fail(e => out.settle(e));
+    return out;
+  },
+
+  /* ⚠️ 下面四个云函数还没写（第 2 步）。现在调用会拿到
+     「cloud function not found」—— 那是预期的，不是坏了。 */
+  insert(b)          { return callCloud('createBooking',  b); },
+  update(id, patch)  { return callCloud('updateBooking',  { id, patch }); },
+  replaceBookings(l) { return callCloud('clearAll',       { bookings: l }); },
+  savePrices(map)    { return callCloud('savePrices',     { prices: map }); },
+};
+
+/* ── 后端开关 ────────────────────────────────────────────
+   ⚠️ 这一行是整套东西的总闸。谁把它改回 localBackend，整个项目会
+      【静默退回单机版】：功能看着一切正常，只是客人的订单老板永远
+      收不到。没有任何别的断言能发现这种回退 —— smoke.js 末尾有一条
+      静态断言直接读这行源码盯着它。 */
+let backend = cloudBackend;
+
+const _backends = { localBackend, cloudBackend };
+
+/* 测试专用：把整套断言切回本地后端。
+   为什么必须能切：本地后端【同步】settle，这是 smoke.js 能在 jsc 里
+   一路同步跑完的前提（云端后端是异步的，几百条断言没法那么写）。
+   ⚠️ 它切的是「用哪个后端」这个配置指针，不是数据 —— 「store 不存状态」
+      那条规矩说的是数据，没被破坏。下划线开头 = 产品代码不许碰。 */
+function _useBackend(b) { backend = b; }
 
 module.exports = {
   readCache,
   makeTask,       // core 要自己造 task（拼业务结果、串两次写），见下面的说明
   fetched,
-  fetchAll:         ()          => backend.fetchAll(),
+  fetchAll:         opts        => backend.fetchAll(opts),
   insert:           b           => backend.insert(b),
   update:           (id, patch) => backend.update(id, patch),
   replaceBookings:  list        => backend.replaceBookings(list),
   savePrices:       map         => backend.savePrices(map),
+  _backends,
+  _useBackend,
 };

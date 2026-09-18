@@ -252,9 +252,45 @@ function applyBookings(list) {
  *   ③ 所以「拿到数据之后要做的事」必须写在 cb 里，
  *      【绝不能】写在 refresh() 的下一行 —— 本地能跑，云端必崩。
  */
+/**
+ * 这次请求该不该带管理口令。
+ *
+ * ⚠️ 只有在【真的解锁过】管理端之后才发。要是无脑带上 CONFIG.adminPasscode，
+ *    那么每个客人的手机都会拿着口令去问，云函数那边「非管理员只拿投影」
+ *    就永远不会生效 —— 等于把所有人的手机号发给所有人，
+ *    而那正是这套投影存在的理由。
+ *
+ * 解锁状态就存在 app.globalData.adminUnlocked（预约页长按标题时置上），
+ * 这里只是读它，不另存一份 —— 两份状态迟早会不一致。
+ */
+function adminPasscode() {
+  try {
+    const app = typeof getApp === 'function' ? getApp() : null;
+    return (app && app.globalData && app.globalData.adminUnlocked)
+      ? CONFIG.adminPasscode : '';
+  } catch (e) { return ''; }   // 测试环境里没有 getApp，当成没解锁
+}
+
 function refresh(cb) {
-  const t = store.fetchAll();
-  t.done(d => { applyBookings(d.bookings); applyPrices(d.prices); });
+  /* dateKeys 在【这里】算，不在 store.js 里算 —— 全项目只有这一份
+     「第几天 → 日期」的换算（buildDates / toDateKey）。store 再写一份
+     就会多出一个会走偏的定义。 */
+  const t = store.fetchAll({
+    dateKeys: DATES.map(toDateKey),
+    passcode: adminPasscode(),
+  });
+  t.done(d => {
+    applyBookings(d.bookings);
+    applyPrices(d.prices);
+    /* ⚠️ 临时的（第 3 步删）。这一行回答的是「数据到了之后有没有落到内存里」
+       —— 上面 store 那行打的是「网络回来什么」，这行打的是「内存里现在是什么」。
+       两行一起看，能一次分清三种空：没回来 / 回来了但被丢掉 / 回来了但日期对不上
+       （datakey 会和客人页正在看的那天一起打出来）。 */
+    if (typeof console !== 'undefined' && console.info) {
+      console.info('[core] 内存里 ' + BOOKINGS.length + ' 单，今天 = ' + toDateKey(DATES[0])
+        + '，第0天起的 7 天 = ' + DATES.map(toDateKey).join(' '));
+    }
+  });
   t.fail(err => {
     // 失败【不清缓存】：宁可用旧数据，也别把界面清空
     if (typeof console !== 'undefined' && typeof console.warn === 'function') {
