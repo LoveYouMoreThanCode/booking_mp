@@ -211,7 +211,7 @@ Page({
   onResetAll() {
     wx.showModal({
       title: '清空全部数据？',
-      content: '所有预约记录和管理员手改的价格都会被清除，回到初始演示数据。此操作不可撤销。',
+      content: '所有预约记录和管理员手改的价格都会被清除，而且不可撤销。',
       confirmText: '确认清空',
       confirmColor: '#FA5151',
       success: r => {

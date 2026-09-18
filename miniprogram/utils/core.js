@@ -224,8 +224,6 @@ function isPastSpan(dayIdx, from, to) {
    见 README 的「接云开发」一节。
    ══════════════════════════════════════════════════════════════ */
 
-const SEED_FLAG = 'mp_seeded_v1';
-
 const PENDING = 'pending', CONFIRMED = 'confirmed', CANCELLED = 'cancelled';
 
 const STATUS_TEXT = {
@@ -244,11 +242,6 @@ function applyBookings(list) {
   BOOKINGS.length = 0;
   (list || []).forEach(b => BOOKINGS.push(b));
 }
-
-/* 写回存储（整表覆盖）。只给「整批替换」的场景用（演示数据、清空数据）；
-   单条订单的增改走 store.insert / store.update —— 云端那两条各对应一次
-   云函数调用，整表替换则会用一台手机的数据盖掉所有人的。 */
-function writeStore() { return store.replaceBookings(BOOKINGS); }
 
 /**
  * 拉一次权威数据，覆盖内存缓存，然后回调。
@@ -493,54 +486,6 @@ function summarize(dayIdx, keys) {
   return { items, total, count: keys.length, hours: keys.length * CONFIG.bookMin / 60 };
 }
 
-/* ── 演示数据 ────────────────────────────────────────── */
-function seedDemoBookings() {
-  if (BOOKINGS.length) return;
-  try { if (wx.getStorageSync(SEED_FLAG)) return; } catch (e) {}
-
-  const now = Date.now();
-  const H = h => h * 60;
-
-  const mk = (dayIdx, ci, from, to, phone, name, note, status, hoursAgo) => {
-    const slotKeys = [];
-    let total = 0;
-    for (let m = from; m < to; m += CONFIG.slotMin) {
-      slotKeys.push(`${ci}|${m}`);
-      total += priceFor(dayIdx, ci, m);
-    }
-    const t = now - hoursAgo * 3600e3;
-    return {
-      id: 'B' + t.toString(36) + Math.random().toString(36).slice(2, 5),
-      createdAt: t, updatedAt: t,
-      dateKey: toDateKey(DATES[dayIdx]),
-      items: [{ ci, court: CONFIG.courts[ci], from, to, price: total }],
-      slotKeys, phone, name, note, total, status,
-      reply: status === CONFIRMED ? '电话已确认' : '',
-    };
-  };
-
-  applyBookings([
-    mk(1, 1, H(19),   H(20),   '13700137003', '王强', '带小朋友，麻烦留矮网', PENDING, 0.4),
-    mk(1, 3, H(20),   H(21),   '13600136004', '陈静', '',                     PENDING, 1.2),
-    mk(2, 0, H(9),    H(10),   '13500135005', '刘洋', '公司团建，8 个人',     PENDING, 2.6),
-    mk(3, 2, H(18),   H(20),   '13400134006', '赵敏', '',                     PENDING, 5.1),
-
-    mk(0, 0, H(18),   H(19),   '13800138001', '张伟', '需要球网',             CONFIRMED, 30),
-    mk(0, 2, H(20),   H(21),   '13900139002', '李娜', '',                     CONFIRMED, 26),
-    mk(1, 0, H(8),    H(9),    '13300133007', '孙磊', '每周固定',             CONFIRMED, 20),
-    mk(1, 2, H(15),   H(17),   '13200132008', '周涛', '',                     CONFIRMED, 18),
-    mk(2, 1, H(17),   H(18),   '13100131009', '吴倩', '租两支球拍',           CONFIRMED, 12),
-    mk(2, 3, H(19),   H(20),   '13000130010', '郑凯', '',                     CONFIRMED, 9),
-    mk(3, 0, H(10),   H(11),   '15900159011', '马丽', '',                     CONFIRMED, 7),
-    mk(4, 2, H(21),   H(22),   '15800158012', '黄鹏', '晚场，别锁门',         CONFIRMED, 4),
-
-    mk(2, 0, H(14),   H(15),   '15700157013', '徐婷', '',                     CANCELLED, 8),
-  ]);
-
-  try { wx.setStorageSync(SEED_FLAG, 1); } catch (e) {}
-  writeStore();
-}
-
 /**
  * 清空全部数据（订单 + 手改价）。返回 task。
  *
@@ -554,7 +499,6 @@ function clearAllData() {
 
   applyBookings([]);                    // 原地清空，别换数组（页面握着它）
   Object.keys(PRICE_OVERRIDES).forEach(k => delete PRICE_OVERRIDES[k]);
-  try { wx.setStorageSync(SEED_FLAG, 1); } catch (e) {}
 
   const out = store.makeTask();
   const fail = err => { rollback(); out.settle(err); };
@@ -581,6 +525,6 @@ module.exports = {
   createBooking, findBooking, setBookingStatus, confirmBooking, cancelBooking,
   bookingAt, slotStatus, spanStatus, spanPrice, bookingsByStatus, countByStatus, firstMin,
   timeAgo, isToday, groupSlots, parseKeys, summarize,
-  seedDemoBookings, clearAllData,
+  clearAllData,
   get BOOKINGS() { return BOOKINGS; },
 };

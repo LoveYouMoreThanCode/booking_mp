@@ -140,7 +140,9 @@ const localBackend = {
     }));
   },
 
-  /* 整表覆盖。2a 阶段所有写都走它，行为与原来的 writeStore() 完全一致。 */
+  /* 整表覆盖。现在只剩「清空数据」在用它。
+     单条订单的增改走 insert / update —— 云端那两条各对应一次云函数调用，
+     而整表替换会用一台手机的数据盖掉所有人的。 */
   replaceBookings(list) {
     return settleNow(() => {
       wx.setStorageSync(STORE_KEY, list || []);

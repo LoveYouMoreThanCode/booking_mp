@@ -242,7 +242,74 @@ eq(core.HOURS.length, 14, '14 个小时行');
 eq(core.BOOKS.length, 14, '14 个可订段 (8:00–22:00 每小时一段)');
 eq(core.DATES.length, 7, '未来 7 天');
 
-core.seedDemoBookings();
+/* ── 演示数据的 fixture ────────────────────────────────
+   这段原来在 core.js 里，由 app.js 的 onLaunch 自动调用 —— 而 smoke.js
+   从不加载 app.js，所以那一行是【零覆盖】的。
+
+   为什么搬到测试里：接云之后「本机已灌过」那个标记不存在了，每个新客人
+   第一次打开都会往共享数据库里灌 13 条假订单。生产代码不该夹带假手机号
+   和「必须灌一次」的逻辑，而测试确实需要一张有数据的表格。
+
+   说清楚它现在【管多少事】：只有紧接着的 4 条断言（13 / 4 / 8 / 1 条的
+   状态分布）依赖它。装完之后第 336 行就 clearAllData 了，后面每一节都
+   自己造数据。所以别以为它撑着「几十条断言」—— 实测过：整段删掉，
+   红的正好就是那 4 条。
+
+   那还留着它干嘛：这 13 条是「一张有数据的表格」的样子，一条不差地
+   搬自原来的 seedDemoBookings。数量少了这几条就退化成「随便塞几条」。
+
+   ⚠️ 改这 13 条就得同步改那 4 条数字，否则红的地方看起来和改动无关。 */
+
+var storeMod = loadModule('utils/store.js').exports;
+
+function demoBookings() {
+  var now = Date.now();                     // 测试里的 Date 是桩件，可控
+  var H = function (h) { return h * 60; };
+
+  var mk = function (dayIdx, ci, from, to, phone, name, note, status, hoursAgo) {
+    var slotKeys = [];
+    var total = 0;
+    for (var m = from; m < to; m += CONFIG.slotMin) {
+      slotKeys.push(ci + '|' + m);
+      total += core.priceFor(dayIdx, ci, m);
+    }
+    var t = now - hoursAgo * 3600e3;
+    return {
+      id: 'B' + t.toString(36) + Math.random().toString(36).slice(2, 5),
+      createdAt: t, updatedAt: t,
+      dateKey: core.toDateKey(core.DATES[dayIdx]),
+      items: [{ ci: ci, court: CONFIG.courts[ci], from: from, to: to, price: total }],
+      slotKeys: slotKeys, phone: phone, name: name, note: note,
+      total: total, status: status,
+      reply: status === core.CONFIRMED ? '电话已确认' : '',
+    };
+  };
+
+  return [
+    mk(1, 1, H(19), H(20), '13700137003', '王强', '带小朋友，麻烦留矮网', core.PENDING, 0.4),
+    mk(1, 3, H(20), H(21), '13600136004', '陈静', '', core.PENDING, 1.2),
+    mk(2, 0, H(9),  H(10), '13500135005', '刘洋', '公司团建，8 个人', core.PENDING, 2.6),
+    mk(3, 2, H(18), H(20), '13400134006', '赵敏', '', core.PENDING, 5.1),
+
+    mk(0, 0, H(18), H(19), '13800138001', '张伟', '需要球网', core.CONFIRMED, 30),
+    mk(0, 2, H(20), H(21), '13900139002', '李娜', '', core.CONFIRMED, 26),
+    mk(1, 0, H(8),  H(9),  '13300133007', '孙磊', '每周固定', core.CONFIRMED, 20),
+    mk(1, 2, H(15), H(17), '13200132008', '周涛', '', core.CONFIRMED, 18),
+    mk(2, 1, H(17), H(18), '13100131009', '吴倩', '租两支球拍', core.CONFIRMED, 12),
+    mk(2, 3, H(19), H(20), '13000130010', '郑凯', '', core.CONFIRMED, 9),
+    mk(3, 0, H(10), H(11), '15900159011', '马丽', '', core.CONFIRMED, 7),
+    mk(4, 2, H(21), H(22), '15800158012', '黄鹏', '晚场，别锁门', core.CONFIRMED, 4),
+
+    mk(2, 0, H(14), H(15), '15700157013', '徐婷', '', core.CANCELLED, 8),
+  ];
+}
+
+/* 装进内存：先落存储，再走一次 refresh 拉回来 ——
+   和页面 onShow 走的是同一条路，不直接碰 core 的内部数组。
+   （只 push 进 BOOKINGS 是不够的：下一次 refresh 会被存储里的空数据覆盖掉。） */
+storeMod.replaceBookings(demoBookings());
+core.refresh(function () {});
+
 eq(core.BOOKINGS.length, 13, '演示数据 13 条');
 eq(core.countByStatus(core.PENDING), 4, '待确认 4 条');
 eq(core.countByStatus(core.CONFIRMED), 8, '已确认 8 条');
@@ -861,7 +928,8 @@ console.log('\n── 两段式：缓存先渲染，数据回来再刷新 ──
 
    这是这一步唯一能在本地被证伪的东西，所以单独关起来测。 */
 
-var storeMod = loadModule('utils/store.js').exports;
+/* storeMod 在上面装 fixture 时就拿到了（loadModule 缓存 utils/ 下的模块，
+   拿到的是同一个对象，所以直接改它的 fetchAll 就能影响 core）。 */
 var realFetchAll = storeMod.fetchAll;
 
 /** 把「服务器」按住不动：所有取数都挂起，直到 arrive() 手动放行 */
@@ -932,6 +1000,40 @@ wx.stopPullDownRefresh = realStop;
 core.clearAllData();
 
 /* ══════════════════════════════════════════════════ */
+console.log('\n── 全新安装：存储是空的 ────────────────────');
+/* 删掉自动灌数据之后，这一屏就是【真实的首次打开】。
+   以前它被 seedDemoBookings 盖着，从来没被测过 —— 假订单挡在前面，
+   就算空表格是坏的也看不出来。
+
+   现在新装的客人第一眼看到的就是它，所以得确认它是能用的：
+   全空、全可约、不报错。这是这次改动最直接的验收。 */
+setClock(10, 0);                 // 拨到上午，免得「今天已过」混进来
+
+var freshBk = loadPage('pages/booking/booking.js');
+freshBk.onLoad();
+freshBk.onTapDate(ev({ idx: DAY }));      // 看明天，和「今天过了多少」无关
+
+eq(freshBk.data.gridRows.length, 14, '空存储下预约页照样有 14 行');
+ok(freshBk.data.gridRows.every(function (r) {
+  return r.courts.every(function (c) { return c.cls === 'cell'; });
+}), '全新安装：所有格子都可约（不靠假订单撑场面）');
+eq(freshBk.data.hasSelection, false, '全新安装：底栏没有选择');
+eq(freshBk.data.footTotal, 0, '全新安装：合计是 0');
+
+var freshOd = loadPage('pages/orders/orders.js');
+freshOd.onShow();
+eq(freshOd.data.list.length, 0, '全新安装：订单页一条都没有');
+eq(freshOd.data.empty, true, '全新安装：订单页显示空状态而不是白屏');
+eq(freshOd.data.tabs[0].count, 0, '全新安装：待确认页签是 0');
+
+var freshPx = loadPage('pages/pricing/pricing.js');
+freshPx.onLoad();
+eq(freshPx.data.gridRows.length, 14, '全新安装：改价页照样有 14 行');
+eq(freshPx.data.overrideCount, 0, '全新安装：没有一个格子是手改价');
+eq(freshPx.data.gridRows[0].courts[0].text, String(core.rulePrice(core.DATES[DAY], 480)),
+  '全新安装：价格全部来自规则价');
+
+/* ══════════════════════════════════════════════════ */
 console.log('\n── 输入框的静态约定 ────────────────────────');
 /* 下面几条只有在真机上才看得出后果，桩件测不到，所以直接查源码文本。
    删掉它们不会让任何一条功能断言变红，只会让真机上的输入框重新变瞎。
@@ -962,6 +1064,22 @@ function wxmlSource(rel) {
   });
   /* 手机号的合法性只在提交时判 —— 打字过程中页面不该有任何动静 */
   ok(/wx:if="\{\{phoneErr\}\}"/.test(src), '手机号的报错是提交后才出现的');
+})();
+
+/* ── 启动时不许自动灌演示数据 ──────────────────────
+   原来 app.js 的 onLaunch 会调 core 里那个 seedDemo* 函数，往存储里塞
+   13 条假订单，靠一个按【设备】的标记防重复。
+
+   为什么必须是静态断言：smoke.js 从来不加载 app.js（它自己起了个 App 桩件），
+   所以功能断言一条都够不着这行代码。接云之后那个标记不存在了，每个新客人
+   第一次打开都会往大家共用的数据库里灌 13 条假订单 —— 而本地跑测试全绿。
+
+   不剥注释、不留例外：app.js 里就不该出现这个形状（连注释里都别写，
+   写了这条会红，然后你自然会去读 app.js 里那段说明）。 */
+(function () {
+  var src = readFile(ROOT + 'app.js');
+  ok(!/seedDemoBookings\s*\(/.test(src), 'app.js 不再自动灌演示数据');
+  ok(!/SEED_FLAG/.test(src), 'app.js 里没有「本机已灌过」的标记');
 })();
 
 /* ══════════════════════════════════════════════════ */
