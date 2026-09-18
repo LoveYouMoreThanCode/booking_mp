@@ -69,7 +69,17 @@ exports.main = async (event = {}) => {
     if (!PRICE_KEY_RE.test(k)) return { ok: false, reason: 'bad-key', detail: k };
   }
 
-  const written = [], removed = [], failed = [];
+  const written = [], removed = [], failed = [], errors = [];
+
+  /* 把【真正的报错】留下来。只 push 一个 key 的话，「一格都没写进去」
+     在返回值里和云函数日志里都只表现为「失败了」，为什么失败一个字都没有 ——
+     老板那边看到的是一句「部分时段没存上」，然后谁也查不下去。
+     ⚠️ 只留前几条：满屏同样的错误没有更多信息，还会把返回值撑大。 */
+  const note = (k, e) => {
+    if (errors.length < 3) {
+      errors.push(k + ' → ' + ((e && (e.errMsg || e.message)) || String(e)));
+    }
+  };
 
   /* ⚠️ 逐格写、逐格删，而且【不整表覆盖】。一格失败不影响别的格 ——
       老板改了 5 格，第 3 格网络抖了一下，另外 4 格该落还是落。
@@ -77,25 +87,53 @@ exports.main = async (event = {}) => {
       只回滚这次动过的 key）。 */
   for (const k of setKeys) {
     try {
+      /* ⚠️ data 里【不写 _id】。目标记录由 doc(k) 指定，本来就轮不到
+         data 再说一遍；而 _id 是不可变的，往替换更新的 data 里塞它，
+         有相当的机会被服务端判成「试图修改 _id」而整条拒绝。
+
+         ⚠️ 这一条【不是实测的】，是从「所有格子一起失败、而失败原因
+            当时被吞掉了」反推出来的第一嫌疑。去掉它是无害的（_id 由
+            doc(k) 决定，写不写都一样），所以先按它改；真正确认靠的是
+            下面那个 note() —— 再失败一次，报错原文就在 detail 里。
+
+         `dateKey` 留着：getSchedule 是按它过滤的，_id 前缀做不了索引。 */
       await db.collection(COLL_PRICES).doc(k).set({
-        data: { _id: k, dateKey: k.split('|')[0], price: Number(set[k]) },
+        data: { dateKey: k.split('|')[0], price: Number(set[k]) },
       });
       written.push(k);
-    } catch (e) { failed.push(k); }
+    } catch (e) { failed.push(k); note(k, e); }
   }
   for (const k of del) {
     try {
-      await db.collection(COLL_PRICES).doc(k).remove();
+      /* ⚠️ 删一个【不存在】的格子不算失败 —— 想要的状态（这格没有改价）
+         本来就已经是了。真云上 doc().remove() 对不存在的文档是【抛】的
+         （台架量到的原文：document.remove:fail document does not exist），
+         于是「恢复规则价」一旦选到几个本来就没改过价的格子，整批就报
+         partial 并回滚 —— 老板点的是一个空操作，却收到一句「部分时段
+         没存上」。
+
+         ⚠️ 判「在不在」用 get，不用去猜 remove 报错的文案。get 一个不存在
+            的文档是【抛】的，这一条是第 0 步在真云上实测过的（errCode -1），
+            比新编一个 /does not exist/ 正则可靠。 */
+      let exists = true;
+      try {
+        const d = await db.collection(COLL_PRICES).doc(k).get();
+        exists = !!(d && d.data);
+      } catch (e) { exists = false; }
+
+      if (exists) await db.collection(COLL_PRICES).doc(k).remove();
       removed.push(k);
-    } catch (e) { failed.push(k); }
+    } catch (e) { failed.push(k); note(k, e); }
   }
 
   if (failed.length) {
     /* ⚠️ 把失败的是【哪几格】原样带回去，不是只给一个数字。
        客户端要靠它决定回滚哪些 —— 写了的那几格回滚等于把已经存好的
        值从界面上抹掉，下一次 refresh 之前老板看到的就是假的。 */
+    console.error('[savePrices] 写失败', JSON.stringify(errors));
     return {
       ok: false, reason: 'partial', failed,
+      detail: errors.join(' ｜ '),
       written: written.length, removed: removed.length,
     };
   }

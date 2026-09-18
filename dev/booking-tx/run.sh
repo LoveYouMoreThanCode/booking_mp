@@ -1,5 +1,5 @@
 #!/bin/sh
-# 在本地把 createBooking / updateBooking / clearAll 跑一遍。
+# 在本地把 createBooking / updateBooking / savePrices / clearAll 跑一遍。
 # 和 test/run.sh 一样用 macOS 自带的 jsc。
 #
 # ⚠️ 成败是【印在输出里】的，不体现在退出码上 —— jsc 里未处理的 Promise 拒绝
