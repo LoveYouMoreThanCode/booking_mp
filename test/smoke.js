@@ -1256,6 +1256,63 @@ eq(cloudCalls[2].data.set['2026-09-18|0|1140'], 99, 'savePrices 发的是被改�
 eq(cloudCalls[2].data.passcode, '8888', 'savePrices 带上口令');
 eq(cloudCalls[3].data.passcode, '8888', 'clearAll 带上口令');
 
+/* ⑦b ⚠️ 写方法收到 ok:false，必须变成【失败】。
+   —— 这是真出过的 bug：云函数回 forbidden，客户端照样当成功，
+      页面弹「已改 3 个时段」，数据库里一个字都没有。老板唯一的线索
+      是自己去翻数据库，而那时已经过去了半天。
+   fetchAll 一直是对的（它调了 unwrapCloud），漏的是三个写方法：
+   它们的调用方都是「成功就弹一句已办妥、失败才回滚」，所以
+   把 ok:false 放过去 = 报假成功。 */
+installCloudStub();
+var w1 = CB.savePrices({ set: { '2026-09-18|0|1140': 99 }, del: [] }, '');
+var w1v = null, w1e = null;
+w1.done(function (v) { w1v = v; }).fail(function (e) { w1e = e; });
+arriveCloud(0, { ok: false, reason: 'forbidden' });
+eq(w1v === null, true, 'savePrices 收到 ok:false 不许走 done');
+eq(w1e && w1e.cloudReason, 'forbidden', 'savePrices 把 ok:false 交成一次带原因的失败');
+
+installCloudStub();
+var w2 = CB.update('B1', { status: 'confirmed' }, '');
+var w2v = null, w2e = null;
+w2.done(function (v) { w2v = v; }).fail(function (e) { w2e = e; });
+arriveCloud(0, { ok: false, reason: 'forbidden' });
+eq(w2v === null, true, 'update 收到 ok:false 不许走 done');
+eq(w2e && w2e.cloudReason, 'forbidden', 'update 把 ok:false 交成一次带原因的失败');
+
+installCloudStub();
+var w3 = CB.clearAll('');
+var w3v = null, w3e = null;
+w3.done(function (v) { w3v = v; }).fail(function (e) { w3e = e; });
+arriveCloud(0, { ok: false, reason: 'forbidden' });
+eq(w3v === null, true, 'clearAll 收到 ok:false 不许走 done');
+eq(w3e && w3e.cloudReason, 'forbidden', 'clearAll 把 ok:false 交成一次带原因的失败');
+
+/* 成功那条路没被这次修复挡掉 —— ok:true 的结果要原样交付，
+   否则 savePrices 的 partial 明细（failed 数组）就传不下去了。 */
+installCloudStub();
+var w4 = CB.savePrices({ set: { '2026-09-18|0|1140': 99 }, del: [] }, '8888');
+var w4v = null;
+w4.done(function (v) { w4v = v; });
+arriveCloud(0, { ok: true, written: 1, removed: 0 });
+eq(!!(w4v && w4v.ok), true, 'ok:true 照样走 done');
+
+/* ⑦c 从【调用方】再验一遍：老板改价失败时，必须回滚 + 报错。
+   上面几条只证明 store 交了失败；这一条证明 core 真的把它当失败处理 ——
+   commitPrices 的 .done 原来是 `() => out.settle(null, true)`，
+   【它压根不看返回值】，那正是这个 bug 藏身的地方。 */
+installCloudStub();
+var H0 = core.HOURS[0];
+var priceKey = '0|' + H0;
+var priceBefore = core.priceFor(0, 0, H0);
+var ovTask = core.setOverrides(0, [priceKey], 777);
+var ovv = null, ove = null;
+ovTask.done(function (v) { ovv = v; }).fail(function (e) { ove = e; });
+arriveCloud(0, { ok: false, reason: 'forbidden' });
+eq(ovv === null, true, '改价失败不许走 done（否则老板看到「已改 N 个时段」）');
+eq(ove && ove.cloudReason, 'forbidden', '改价失败把原因交出来了');
+eq(core.priceFor(0, 0, H0), priceBefore,
+  '改价失败后内存回滚成原价（界面不能显示一个没存进去的价）');
+
 /* ⑧ 切回本地后端，后面几条静态断言不依赖运行时状态 */
 storeMod._useBackend(storeMod._backends.localBackend);
 wx.cloud = realWxCloud;
@@ -1281,6 +1338,18 @@ wx.cloud = realWxCloud;
      「请检查网络后重试」，客人会一直重试一件永远不成的事。 */
   eq(core.errText(reason('state-unknown')),
     '系统数据异常，请稍后再试或联系管理员', '状态未知 → 不许说成「检查网络」');
+
+  /* 改价这条路上真会回的几个。partial = 有几格没写进去（不是全废），
+     让老板「再试一次」是对的；bad-price 是客户端算错了价钱，
+     叫他重试是句假话。 */
+  eq(core.errText(reason('partial')),
+    '部分时段没存上，请再试一次', '部分失败 → 那几格可以再试一次');
+  eq(core.errText(reason('not-found')),
+    '这一单已经不在了，请下拉刷新', '订单没了 → 别让人对着空气重试');
+  ok(!/网络/.test(core.errText(reason('bad-price'))),
+    '数据格式不对【不许】说成「检查网络」', core.errText(reason('bad-price')));
+  ok(!/网络/.test(core.errText(reason('too-many-cells'))),
+    '越线【不许】说成「检查网络」', core.errText(reason('too-many-cells')));
 
   /* 认不出的原因（网络断了、云函数抛了）走 fallback——
      fallback 是调用方给的，因为它才知道自己在干什么。 */
@@ -1446,6 +1515,49 @@ wx.cloud = realWxCloud;
     'ADMIN_WHITELIST 那行是空的、且格式没变（补权限只需填它）');
   ok(/ADMIN_WHITELIST\.length[\s\S]*indexOf\(openid\)/.test(blocks[0] || ''),
     '白名单优先：填了名单之后口令那条路就【完全】不走了');
+})();
+
+/* ── 云函数会回的每个 reason，errText 都得有话可说 ──────
+   ⚠️ 这条是为了堵住一整类 bug，不是补一句话：认不出的 reason 会掉到
+      errText 最后那句「请检查网络后重试」，而云函数的拒绝里【几乎没有
+      一条跟网络有关】—— 让老板去查网络、让客人对着一个永远不成的事
+      一直重试。翻错了的后果不是难看，是让人做错事。
+
+   做法：把每个 cloudfunctions/<名字>/index.js 里的 reason 字符串全捞出来，
+   逐个喂给 errText，带一个【独特的】fallback。谁掉回那个 fallback，
+   就说明 errText 没有它的话。云函数那边新加 reason 而这里没跟上，
+   这条会当场红 —— 而不是等到某个老板在真机上收到一句假话。 */
+(function () {
+  var files = ['getSchedule', 'createBooking', 'updateBooking', 'savePrices', 'clearAll'];
+  var reasons = [];
+  files.forEach(function (name) {
+    var src = readFile(ROOT + '../cloudfunctions/' + name + '/index.js');
+    var re = /reason: '([a-z-]+)'/g, m;
+    while ((m = re.exec(src))) {
+      if (reasons.indexOf(m[1]) < 0) reasons.push(m[1]);
+    }
+  });
+
+  ok(reasons.length >= 15, '从云函数里捞到了 reason 表', reasons.length);
+
+  var SENTINEL = '（掉到了 fallback）';
+  var fell = reasons.filter(function (r) {
+    var e = new Error('x');
+    e.cloudReason = r;
+    return core.errText(e, SENTINEL) === SENTINEL;
+  });
+  eq(fell.join(','), '', '云函数会回的每个 reason，errText 都有对应的一句话');
+
+  /* 顺带钉住那条最容易搞错的分界：没带 cloudReason 的错 = 传输层失败
+     （callFunction 自己 reject 了），那才是「检查网络」；
+     带了 cloudReason 'error' = 云函数抛了异常，不该让人去查网络。 */
+  var netErr = new Error('request:fail');
+  eq(core.errText(netErr, '提交失败，请检查网络后重试'),
+    '提交失败，请检查网络后重试', '断网（没有 cloudReason）才说「检查网络」');
+  var threw = new Error('x');
+  threw.cloudReason = 'error';
+  ok(!/网络/.test(core.errText(threw, '提交失败，请检查网络后重试')),
+    '云函数抛异常时【不许】说成「检查网络」', core.errText(threw));
 })();
 
 /* ── 口令只在真解锁之后才发出去 ────────────────────

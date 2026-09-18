@@ -222,9 +222,40 @@ const localBackend = {
 function callCloud(name, data) {
   const t = makeTask();
   wx.cloud.callFunction({ name, data })
-    .then(r => t.settle(null, r && r.result))
+    .then(r => {
+      const res = r && r.result;
+      /* ⚠️ 临时的（第 3 步删）。云函数说「不行」时，本地什么痕迹都没有 ——
+         页面该弹的提示由调用方决定，但【为什么不行】只有这里有。 */
+      if (res && res.ok === false && typeof console !== 'undefined' && console.warn) {
+        console.warn('[cloud] ' + name + ' 回了 ok:false → ' + res.reason
+          + (res.detail ? '（' + res.detail + '）' : ''));
+      }
+      t.settle(null, res);
+    })
     .catch(e => t.settle(e));
   return t;
+}
+
+/* 写方法专用的收尾：云函数回 ok:false 时，把它变成一次【失败】。
+
+   ⚠️ 少了这一步，云函数说「不行」会被当成【成功】。这是真出过的 bug：
+      改价返回 forbidden，页面照样弹「已改 3 个时段」，数据库里一个字都没有 ——
+      老板只能自己发现价格没变，而且【没改的那些格和改过的长得一模一样】。
+      凡是「写」的路径，都不能把 ok:false 当成功往下放。
+
+   ⚠️ insert 是唯一的例外，它走的还是 callCloud。因为它失败时带着
+      `skipped`（哪几格被抢走了）—— 那是要交给客人的业务数据，不是错误
+      信息，core.js 的 createBooking 专门读它。契约不同是故意的，
+      不是漏改；这里留个记号，免得下次有人「顺手统一」把它改掉。 */
+function callCloudWrite(name, data) {
+  const out = makeTask();
+  callCloud(name, data)
+    .done(res => {
+      const bad = unwrapCloud(res);
+      if (bad) out.settle(bad); else out.settle(null, res);
+    })
+    .fail(e => out.settle(e));
+  return out;
 }
 
 /* 云函数用 ok:false 表达「我跑通了，但这事办不成」（比如日期参数不合法）。
@@ -306,9 +337,13 @@ const cloudBackend = {
   },
 
   /* 后三个是管理端操作，必须带上口令 —— 鉴权在云函数里做，
-     客户端只是把口令【在真解锁之后】发出去（见 core.js 的 adminPasscode）。 */
+     客户端只是把口令【在真解锁之后】发出去（见 core.js 的 adminPasscode）。
+
+     ⚠️ 三个都走 callCloudWrite（不是 callCloud）：它们的调用方都是
+        「成功了就弹一句已办妥、失败了才回滚」，把 ok:false 放过去
+        就等于报假成功。见上面 callCloudWrite 的说明。 */
   update(id, patch, passcode) {
-    return callCloud('updateBooking', { id, patch, passcode });
+    return callCloudWrite('updateBooking', { id, patch, passcode });
   },
 
   /* diff = { set: {格子key: 价格}, del: [格子key] }
@@ -316,13 +351,13 @@ const cloudBackend = {
         另一个管理员同时改的别的格子一起抹掉，而且谁都不会发现。 */
   savePrices(diff, passcode) {
     const d = diff || {};
-    return callCloud('savePrices', { set: d.set || {}, del: d.del || [], passcode });
+    return callCloudWrite('savePrices', { set: d.set || {}, del: d.del || [], passcode });
   },
 
   /* 清空三张集合，一次调用。顺序在云函数里写死（occupancy → bookings
      → prices），客户端管不着也不该管。 */
   clearAll(passcode) {
-    return callCloud('clearAll', { passcode });
+    return callCloudWrite('clearAll', { passcode });
   },
 };
 

@@ -161,6 +161,16 @@ function commitPrices(undo) {
   return out;
 }
 
+/* 云函数会回的「形状不对」和「越线」两类 reason（见下面 errText 的说明）。
+   列在这里而不是写成十几个 if，是因为它们各自要说的话是同一句。 */
+const SHAPE_REASONS = [
+  'bad-id', 'bad-date', 'bad-slot', 'bad-phone', 'bad-reply', 'bad-status',
+  'no-slots', 'bad-key', 'bad-price',
+];
+const LIMIT_REASONS = [
+  'too-many-slots', 'too-many-cells', 'too-many-dates', 'over-limit',
+];
+
 /** 把 store 的失败翻成一句能给老板看的话。
     分得开很重要：「被抢了」是正常的业务结果，让人一直重试是错的；
     「口令失效」重试一万次也没用。 */
@@ -173,6 +183,29 @@ function errText(err, fallback) {
   /* 「状态未知」= 占用表不见了（比如有人清空到一半断了）。这不是网络问题，
      让客人「检查网络后重试」是句假话 —— 重试一万次都一样。 */
   if (r === 'state-unknown') return '系统数据异常，请稍后再试或联系管理员';
+  if (r === 'partial')    return '部分时段没存上，请再试一次';
+  if (r === 'not-found')  return '这一单已经不在了，请下拉刷新';
+  /* ── 剩下的是「形状」和「上限」两类拒绝 ────────────────────
+     ⚠️ 这两类都【不是网络问题】，也不该让用户「再试一次」：
+        形状不对 = 客户端和服务端对不上（谁改歪了）；上限越线 =
+        配置改大了（README §七 就是在教人改那个块）。两者重试
+        一万次都一样，说成「请检查网络」是句假话。
+     ⚠️ 这张表必须和云函数真的会回的 reason 一一对上。smoke.js 末尾
+        有一条静态断言：把每个云函数里的 reason
+        全捞出来，逐个喂给 errText，谁掉到最下面那句 fallback 谁红。
+        所以云函数那边新加一个 reason，这里不加就会当场失败。 */
+  if (SHAPE_REASONS.indexOf(r) >= 0) return '数据格式不对，请退出重进；反复出现请联系管理员';
+  if (LIMIT_REASONS.indexOf(r) >= 0) return '一次操作的时段太多，请分批操作';
+  /* 读侧的失败（getSchedule）。这两条是「搭起来时最常见的那种错」，
+     比如集合忘了建、走了多余的日期 —— 只有控制台看得到。 */
+  if (r === 'no-dates' || r === 'read-failed') return '读取云端数据失败，请稍后再试';
+  /* ⚠️ 'error' = 云函数【抛了异常】（不是网络断、也不是业务拒绝）。
+     和下面那句「检查网络」分得开：一个没带 cloudReason 的错才是断网
+     （callFunction 本身 reject 了），那种才值得让人重试。
+     把服务端崩了说成「检查网络」是句假话。 */
+  if (r === 'error' || r === 'unknown') {
+    return '云端出错了，请稍后再试（反复出现请联系管理员）';
+  }
   /* fallback 给调用方留一句更贴切的话 —— 客人看到「提交失败」比
      「操作失败」清楚得多，而老板那边「操作失败」才是对的。 */
   return fallback || '操作失败，请检查网络后重试';
